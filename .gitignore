@@ -3,3 +3,8 @@ zig-out
 corpus.txt
 my_bpe-merges.txt
 my_bpe-vocab.json
+datas
+.gitignore
+src/tokenizer/decoder_map.zig
+src/tokenizer/encoder_data.zig
+src/tokenizer/merges_data.zig
