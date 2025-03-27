@@ -10,6 +10,8 @@ pub const GPT2Dataset = struct {
     token_ids: []usize,
     total_sequences: usize,
     pad_token_id: usize, // Added to store the <pad> token ID
+    input_buffer: []usize,
+    target_buffer: []usize,
 
     const Self = @This();
 
@@ -19,8 +21,8 @@ pub const GPT2Dataset = struct {
         sequence_length: usize,
         file_paths: []const []const u8,
     ) !Self {
-        var token_ids = try allocator.alloc(usize, 0);
-        errdefer allocator.free(token_ids);
+        var token_ids_list = std.ArrayList(usize).init(allocator);
+        defer token_ids_list.deinit();
 
         for (file_paths) |path| {
             var file = try std.fs.cwd().openFile(path, .{});
@@ -30,18 +32,19 @@ pub const GPT2Dataset = struct {
             defer allocator.free(content);
 
             const encoded = try tokenizer.encodeAlloc(allocator, content);
-            defer allocator.free(encoded);
-
-            const new_len = token_ids.len + encoded.len;
-            token_ids = try allocator.realloc(token_ids, new_len);
-            @memcpy(token_ids[token_ids.len - encoded.len ..], encoded);
+            try token_ids_list.appendSlice(encoded);
+            allocator.free(encoded);
         }
 
-        // Use ceiling division to account for partial sequences
+        const token_ids = try token_ids_list.toOwnedSlice();
+        errdefer allocator.free(token_ids);
         const total_sequences = (token_ids.len + sequence_length - 1) / sequence_length;
-
-        // Retrieve the <pad> token ID from the tokenizer
         const pad_token_id = tokenizer.encoder_map.get("<pad>") orelse return error.PadTokenNotFound;
+
+        const input_buffer = try allocator.alloc(usize, sequence_length);
+        errdefer allocator.free(input_buffer);
+        const target_buffer = try allocator.alloc(usize, sequence_length);
+        errdefer allocator.free(target_buffer);
 
         return .{
             .allocator = allocator,
@@ -50,11 +53,15 @@ pub const GPT2Dataset = struct {
             .token_ids = token_ids,
             .total_sequences = total_sequences,
             .pad_token_id = pad_token_id,
+            .input_buffer = input_buffer,
+            .target_buffer = target_buffer,
         };
     }
 
     pub fn deinit(self: *Self) void {
         self.allocator.free(self.token_ids);
+        self.allocator.free(self.input_buffer);
+        self.allocator.free(self.target_buffer);
     }
 
     pub fn len(self: *Self) usize {
@@ -69,48 +76,35 @@ pub const GPT2Dataset = struct {
         context: *Context,
     ) !void {
         const input_tensor, const target_tensor = batch;
-
-        // Calculate sequence boundaries
         const start = batch_i * self.sequence_length;
         const end = @min(start + self.sequence_length, self.token_ids.len);
 
-        // Prepare input sequence with padding
-        var input_sequence = try self.allocator.alloc(usize, self.sequence_length);
-        defer self.allocator.free(input_sequence);
+        // Use pre-allocated buffers
+        const input_sequence = self.input_buffer;
+        const target_sequence = self.target_buffer;
 
-        const input_len = end - start; // Actual number of tokens available
+        const input_len = end - start;
         if (input_len > 0) {
             @memcpy(input_sequence[0..input_len], self.token_ids[start..end]);
         }
-        // Pad the rest with <pad> token
         for (input_len..self.sequence_length) |k| {
             input_sequence[k] = self.pad_token_id;
         }
-
-        // Write input sequence to tensor
         try input_tensor.writeFromHostAsync(
             input_sequence,
             i * self.sequence_length,
             context.stream,
         );
 
-        // Prepare target sequence with padding
-        var target_sequence = try self.allocator.alloc(usize, self.sequence_length);
-        defer self.allocator.free(target_sequence);
-
         const ignore_index: usize = std.math.maxInt(usize);
-
-        // Fill target sequence
         for (0..self.sequence_length) |k| {
             const target_pos = start + k + 1;
             if (target_pos < self.token_ids.len) {
                 target_sequence[k] = self.token_ids[target_pos];
             } else {
-                target_sequence[k] = ignore_index; // Pad with ignore_index
+                target_sequence[k] = ignore_index;
             }
         }
-
-        // Write target sequence to tensor
         try target_tensor.writeFromHostAsync(
             target_sequence,
             i * self.sequence_length,

@@ -27,19 +27,26 @@ pub fn main() !void {
 
     const T = f32;
     const max_epochs = 10;
-    const seq_length = 1024;
-    const batch_size = 8;
 
-    var gpt: nina.model.GPT(T, 12) = try .init(
-        .default,
+    const block_size = 128;
+    const batch_size = 4;
+    const n_layer = 4;
+    const n_embd = 128;
+    const n_head = 4;
+
+    var gpt: nina.model.GPT(T, n_layer) = try .init(
+        .{
+            .block_size = block_size,
+            .n_head = n_head,
+            .n_embd = n_embd,
+        },
         &context,
         base_chain,
     );
     defer gpt.destroy();
 
-    const tokenizer: nina.tokenizer.BpeTokenizer = .default;
-
-    var dataset: nina.dataset.GPT2Dataset = try .init(allocator, &tokenizer, seq_length, &.{
+    const tokenizer: nina.tokenizer.BpeTokenizer = try .init();
+    var dataset: nina.dataset.GPT2Dataset = try .init(allocator, &tokenizer, block_size, &.{
         "./datas/tiny.txt",
     });
     defer dataset.deinit();
@@ -56,13 +63,13 @@ pub fn main() !void {
     var optimizer: tomorin.optimizer.AdamW(T) = try .init(.default, &context);
     defer optimizer.deinit();
 
-    var indices_t: tomo.tensor.GPUTensor(usize) = try .initAsync(&.{ batch_size, seq_length }, &stream);
+    var indices_t: tomo.tensor.GPUTensor(usize) = try .initAsync(&.{ batch_size, block_size }, &stream);
     defer indices_t.deinitAsync(&stream);
 
     var indices = try base_chain.createVariable(usize, indices_t.move(), "indices");
     defer indices.destroy();
 
-    var targets_t: tomo.tensor.GPUTensor(usize) = try .initAsync(&.{ batch_size, seq_length }, &stream);
+    var targets_t: tomo.tensor.GPUTensor(usize) = try .initAsync(&.{ batch_size, block_size }, &stream);
     defer targets_t.deinitAsync(&stream);
 
     var targets = try base_chain.createVariable(usize, targets_t.move(), "targets");
@@ -80,6 +87,7 @@ pub fn main() !void {
         timer.reset();
 
         while (try dataloader.writeNextBatch(.{ &indices.asUntagged(usize).data, &targets.asUntagged(usize).data })) |_| {
+
             // Forward pass
             const logits, const loss = try gpt.forward(indices, targets, iter_chain);
 
@@ -93,7 +101,7 @@ pub fn main() !void {
             var host_loss = try loss.?.asUntagged(T).data.toHost(allocator, &stream);
             defer host_loss.deinit(allocator);
 
-            const acc = try tomorin.util.accuracy(T, logits, targets);
+            const acc = try tomorin.util.accuracy(T, logits, targets, 2);
 
             try stream.sync();
             sum_loss += host_loss.at(&.{ 0, 0 }).*;
@@ -119,5 +127,6 @@ pub fn main() !void {
             sum_acc / len,
             @as(f32, @floatFromInt(elapsed)) / @as(f32, @floatFromInt(std.time.ns_per_s)),
         });
+        try gpt.saveBinary(allocator, "gpt_train.bin");
     }
 }

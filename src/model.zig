@@ -270,6 +270,7 @@ pub fn Transformer(comptime T: type, n_layer: comptime_int) type {
 
             inline for (0..n_layer) |i| {
                 x = try @field(self.fields, std.fmt.comptimePrint("h{}", .{i})).forward(x, train, chain);
+                //  try tomorin.util.debugPrintGpuTensor(T, &x.asUntagged(T).data, x.getContext());
             }
             x = try self.fields.ln_f.forward(x, 1e-5, chain);
             return x;
@@ -301,6 +302,10 @@ pub fn GPT(comptime T: type, comptime n_layer: comptime_int) type {
             embedding_winit: Embedding(T).WInit = .he_normal,
 
             pub const default: Config = .{};
+            pub const dbg: Config = .{
+                .n_embd = 256,
+                .n_head = 4,
+            };
         };
 
         pub fn init(
@@ -334,6 +339,7 @@ pub fn GPT(comptime T: type, comptime n_layer: comptime_int) type {
 
         pub fn forward(self: *Self, indices: *TaggedVar, targets: ?*TaggedVar, chain: *Chain) !std.meta.Tuple(&.{ *TaggedVar, ?*TaggedVar }) {
             const x = try self.fields.transformer.forward(indices, targets != null, chain);
+
             if (targets) |targ| {
                 const logits = try self.fields.lm_head.forward(x, chain);
                 const batch = logits.getShape()[0];
@@ -350,7 +356,7 @@ pub fn GPT(comptime T: type, comptime n_layer: comptime_int) type {
 
                 return .{ logits, loss };
             } else {
-                const x_last = try getItemEx(T, x, &.{ .all, .{
+                const x_last = try getItemEx(T, 3, x, .{ .all, .{
                     .start = @intCast(x.getShape()[1] - 1),
                     .stop = @intCast(x.getShape()[1]),
                     .step = 1,
