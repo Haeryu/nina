@@ -1,10 +1,5 @@
 const std = @import("std");
 
-// const encoder_data = @import("encoder_data.zig").encoder_data;
-// const decoder_map = @import("decoder_map.zig").decoder_map;
-// const merge_map = @import("merge_map.zig").merge_map;
-// const encoder_map = @import("encoder_map.zig").encoder_map;
-
 pub const BpeTokenizer = struct {
     merge_map: *const std.StaticStringMap(usize),
     encoder_map: *const std.StaticStringMap(usize),
@@ -22,13 +17,13 @@ pub const BpeTokenizer = struct {
         };
     }
 
-    const default: BpeTokenizer = .{
+    pub const default: BpeTokenizer = .{
         .merge_map = &@import("merge_map.zig").merge_map,
         .encoder_map = &@import("encoder_map.zig").encoder_map,
         .decoder_map = &@import("decoder_map.zig").decoder_map,
     };
 
-    pub fn encodeAlloc(self: *BpeTokenizer, allocator: std.mem.Allocator, input: []const u8) ![]usize {
+    pub fn encodeAlloc(self: *const BpeTokenizer, allocator: std.mem.Allocator, input: []const u8) ![]usize {
         const tokens = try self.applyBpeAlloc(allocator, input);
         defer {
             for (tokens) |t| allocator.free(t);
@@ -42,6 +37,7 @@ pub const BpeTokenizer = struct {
             if (self.encoder_map.get(token)) |id| {
                 try token_ids.append(@intCast(id));
             } else {
+                std.debug.print("\n<{s}>\n", .{token});
                 return error.TokenNotFound;
             }
         }
@@ -49,7 +45,7 @@ pub const BpeTokenizer = struct {
         return token_ids.toOwnedSlice();
     }
 
-    pub fn decodeAlloc(self: *BpeTokenizer, allocator: std.mem.Allocator, ids: []const usize) ![]u8 {
+    pub fn decodeAlloc(self: *const BpeTokenizer, allocator: std.mem.Allocator, ids: []const usize) ![]u8 {
         var decoded = std.ArrayList(u8).init(allocator);
         defer decoded.deinit();
 
@@ -62,7 +58,7 @@ pub const BpeTokenizer = struct {
         return try decoded.toOwnedSlice();
     }
 
-    pub fn applyBpeAlloc(self: *BpeTokenizer, allocator: std.mem.Allocator, input: []const u8) ![][]const u8 {
+    pub fn applyBpeAlloc(self: *const BpeTokenizer, allocator: std.mem.Allocator, input: []const u8) ![][]const u8 {
         var tokens = try std.ArrayList([]const u8).initCapacity(allocator, input.len);
 
         defer {

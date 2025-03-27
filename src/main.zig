@@ -26,11 +26,98 @@ pub fn main() !void {
     context.current_chain = base_chain;
 
     const T = f32;
+    const max_epochs = 10;
+    const seq_length = 1024;
+    const batch_size = 8;
 
     var gpt: nina.model.GPT(T, 12) = try .init(
-        .{},
+        .default,
         &context,
         base_chain,
     );
     defer gpt.destroy();
+
+    const tokenizer: nina.tokenizer.BpeTokenizer = .default;
+
+    var dataset: nina.dataset.GPT2Dataset = try .init(allocator, &tokenizer, seq_length, &.{
+        "./datas/tiny.txt",
+    });
+    defer dataset.deinit();
+
+    var dataloader: tomorin.dataloader.DataLoader(nina.dataset.GPT2Dataset) = try .init(
+        allocator,
+        &dataset,
+        batch_size,
+        true,
+        &context,
+    );
+    defer dataloader.deinit();
+
+    var optimizer: tomorin.optimizer.AdamW(T) = try .init(.default, &context);
+    defer optimizer.deinit();
+
+    var indices_t: tomo.tensor.GPUTensor(usize) = try .initAsync(&.{ batch_size, seq_length }, &stream);
+    defer indices_t.deinitAsync(&stream);
+
+    var indices = try base_chain.createVariable(usize, indices_t.move(), "indices");
+    defer indices.destroy();
+
+    var targets_t: tomo.tensor.GPUTensor(usize) = try .initAsync(&.{ batch_size, seq_length }, &stream);
+    defer targets_t.deinitAsync(&stream);
+
+    var targets = try base_chain.createVariable(usize, targets_t.move(), "targets");
+    defer targets.destroy();
+
+    var iter_chain = try context.createChain();
+    defer iter_chain.destroy();
+
+    var timer = try std.time.Timer.start();
+
+    for (0..max_epochs) |epoch| {
+        dataloader.reset();
+        var sum_loss: T = 0.0;
+        var sum_acc: T = 0.0;
+        timer.reset();
+
+        while (try dataloader.writeNextBatch(.{ &indices.asUntagged(usize).data, &targets.asUntagged(usize).data })) |_| {
+            // Forward pass
+            const logits, const loss = try gpt.forward(indices, targets, iter_chain);
+
+            indices.clearGrad();
+            targets.clearGrad();
+            gpt.clearGrads();
+
+            try loss.?.backwardEx(iter_chain);
+            try optimizer.update(&gpt.getParams());
+
+            var host_loss = try loss.?.asUntagged(T).data.toHost(allocator, &stream);
+            defer host_loss.deinit(allocator);
+
+            const acc = try tomorin.util.accuracy(T, logits, targets);
+
+            try stream.sync();
+            sum_loss += host_loss.at(&.{ 0, 0 }).*;
+            sum_acc += acc;
+
+            try stream.sync();
+
+            std.debug.print("epoch {} loss {d} acc {d}\n", .{
+                epoch + 1,
+                host_loss.at(&.{ 0, 0 }).*,
+                acc,
+            });
+
+            iter_chain.clear();
+        }
+
+        const len: T = @floatFromInt(dataloader.max_iter);
+        const elapsed = timer.lap();
+
+        std.debug.print("epoch {} avg loss {d} acc {d} elapsed {d}\n", .{
+            epoch + 1,
+            sum_loss / len,
+            sum_acc / len,
+            @as(f32, @floatFromInt(elapsed)) / @as(f32, @floatFromInt(std.time.ns_per_s)),
+        });
+    }
 }

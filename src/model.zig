@@ -159,6 +159,7 @@ pub fn Block(comptime T: type) type {
                     1e-5,
                     chain,
                 ),
+                train,
                 chain,
             ), chain);
 
@@ -254,23 +255,23 @@ pub fn Transformer(comptime T: type, n_layer: comptime_int) type {
             // const b = indices.getShape()[0];
             const t = indices.getShape()[1];
 
-            var pos_data: GPUTensor(usize) = try .initAsync(.{ 1, t, 1 }, self.context.stream);
+            var pos_data: GPUTensor(usize) = try .initAsync(&.{ 1, t, 1 }, self.context.stream);
             errdefer pos_data.deinitAsync(self.context.stream);
             try pos_data.arange(0, 1, self.context.stream);
 
             var pos = try chain.createVariable(usize, pos_data.move(), null);
-            pos = try broadcastToEx(usize, pos, .{ 1, t, self.config.n_embd }, chain);
+            pos = try broadcastToEx(usize, pos, &.{ 1, t, self.config.n_embd }, chain);
 
             const tok_emb = try self.fields.wte.forward(indices, chain);
             var pos_emb = try self.fields.wpe.forward(pos, chain);
             pos_emb = try broadcastToEx(T, pos_emb, tok_emb.getShape(), chain);
 
-            var x = self.fields.drop.forward(try addEx(T, tok_emb, pos_emb, chain), train, chain);
+            var x = try self.fields.drop.forward(try addEx(T, tok_emb, pos_emb, chain), train, chain);
 
-            inline for (0..self.config.n_layer) |i| {
+            inline for (0..n_layer) |i| {
                 x = try @field(self.fields, std.fmt.comptimePrint("h{}", .{i})).forward(x, train, chain);
             }
-            x = self.fields.ln_f.forward(x, 1e-5, chain);
+            x = try self.fields.ln_f.forward(x, 1e-5, chain);
             return x;
         }
     };
@@ -298,6 +299,8 @@ pub fn GPT(comptime T: type, comptime n_layer: comptime_int) type {
             nobias: bool = false,
             linear_winit: Linear(T).WInit = .he_normal,
             embedding_winit: Embedding(T).WInit = .he_normal,
+
+            pub const default: Config = .{};
         };
 
         pub fn init(
@@ -339,7 +342,7 @@ pub fn GPT(comptime T: type, comptime n_layer: comptime_int) type {
                 const logits_reshaped = try reshapeEx(T, logits, &.{ batch * seq_len, vocab_size }, chain);
                 const target_batch = targ.getShape()[0];
                 const target_seq_len = targ.getShape()[1];
-                const target = try reshapeEx(T, targ, &.{ target_batch * target_seq_len, 1 }, chain);
+                const target = try reshapeEx(usize, targ, &.{target_batch * target_seq_len}, chain);
                 const loss = try softmaxCrossEntropyEx(T, logits_reshaped, .{
                     .t = target,
                     .ignore_index = std.math.maxInt(usize),
@@ -348,8 +351,8 @@ pub fn GPT(comptime T: type, comptime n_layer: comptime_int) type {
                 return .{ logits, loss };
             } else {
                 const x_last = try getItemEx(T, x, &.{ .all, .{
-                    .start = x.getShape()[1] - 1,
-                    .stop = x.getShape()[1],
+                    .start = @intCast(x.getShape()[1] - 1),
+                    .stop = @intCast(x.getShape()[1]),
                     .step = 1,
                 }, .all }, chain);
                 const logits = try self.fields.lm_head.forward(x_last, chain);
