@@ -2,13 +2,15 @@ import json
 import os
 from tokenizers import ByteLevelBPETokenizer
 import requests
+import unicodedata
+import re
 
 # === 설정 ===
 vocab_url = "https://huggingface.co/gpt2/raw/main/vocab.json"
 merges_url = "https://huggingface.co/gpt2/raw/main/merges.txt"
 vocab_file = "datas/vocab.json"
 merges_file = "datas/merges.txt"
-corpus_files = ["datas/corpus.txt", "datas/tiny.txt"]
+raw_corpus_files = ["datas/corpus.txt", "datas/tiny.txt"]
 zig_output_dir = "src/tokenizer"
 model_prefix = "my_bpe"
 
@@ -51,10 +53,39 @@ def escape_for_zig(s):
         elif 0x20 <= ord(c) <= 0x7E:
             result.append(c)
         else:
-            result.append(f"\\u{{{ord(c):X}}}")
+            #result.append(f"\\u{{{ord(c):X}}}")
+            result.append(c)
     return ''.join(result)
 
-def train_tokenizer():
+
+def clean_text(text: str) -> str:
+    text = unicodedata.normalize("NFKC", text)
+    text = text.replace('\ufeff', '')
+    text = text.replace("\r\n", "\n").replace("\r", "\n")   
+    replacements = {
+        "“": '"', "”": '"', "‘": "'", "’": "'",
+        "—": "-", "–": "-", "…": "...",
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    text = re.sub(r"[^\x20-\x7E\n\t]", "", text)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+def clean_and_save_files(files):
+    cleaned_paths = []
+    for path in files:
+        with open(path, "r", encoding="utf-8", newline="\n") as rf:
+            text = rf.read()
+        cleaned_text = clean_text(text)
+        out_path = path.replace(".txt", ".cleaned.txt")
+        with open(out_path, "w", encoding="utf-8", newline="\n") as wf:
+            wf.write(cleaned_text)
+        cleaned_paths.append(out_path)
+    return cleaned_paths
+
+def train_tokenizer(corpus_files):
     tokenizer = ByteLevelBPETokenizer(vocab_file, merges_file, add_prefix_space=False)
     tokenizer.train(files=corpus_files, vocab_size=gpt2_vocab_size, special_tokens=special_tokens)
     tokenizer.save_model("datas", model_prefix)
@@ -109,5 +140,7 @@ def export_zig_files(tokenizer):
 
 if __name__ == "__main__":
     download_tokenizer_files()
-    tokenizer = train_tokenizer()
+    cleaned_files = clean_and_save_files(raw_corpus_files)
+    tokenizer = train_tokenizer(cleaned_files)
     export_zig_files(tokenizer)
+    # print(tokenizer.token_to_id(' '))

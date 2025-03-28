@@ -6,6 +6,36 @@ pub const BpeTokenizer = struct {
     decoder_map: []const []const u8,
     unk_token_id: usize,
 
+    fn preprocess(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
+        var result = std.ArrayList(u8).init(allocator);
+        defer result.deinit(); // Free on error or if toOwnedSlice fails
+
+        var iter = (try std.unicode.Utf8View.init(input)).iterator();
+        while (iter.nextCodepointSlice()) |cp| {
+            if (std.mem.eql(u8, cp, " ")) {
+                try result.appendSlice("Ġ");
+            } else if (std.mem.eql(u8, cp, "\n")) {
+                try result.appendSlice("Ċ");
+            }
+            // } else if (std.mem.eql(u8, cp, "\r")) {
+            //     continue;
+            // }
+            else {
+                try result.appendSlice(cp);
+            }
+        }
+
+        // for (input) |c| {
+        //     if (c == ' ') {
+        //         try result.append(0xC4); // First byte of Ġ
+        //         try result.append(0xA0); // Second byte of Ġ
+        //     } else {
+        //         try result.append(c);
+        //     }
+        // }
+        return result.toOwnedSlice();
+    }
+
     pub fn initCustom(
         merge_map: *const std.StaticStringMap(usize),
         encoder_map: *const std.StaticStringMap(usize),
@@ -33,9 +63,13 @@ pub const BpeTokenizer = struct {
     }
 
     pub fn encodeAlloc(self: *const BpeTokenizer, allocator: std.mem.Allocator, input: []const u8) ![]usize {
-        const tokens = try self.applyBpeAlloc(allocator, input);
+        const preprocessed = try preprocess(allocator, input);
+        defer allocator.free(preprocessed);
+
+        // const tokens = try self.applyBpeAlloc(allocator, input);
+        const tokens = try self.applyBpeAlloc(allocator, preprocessed);
         defer {
-            for (tokens) |t| allocator.free(t);
+            // for (tokens) |t| allocator.free(t);
             allocator.free(tokens);
         }
 
@@ -57,7 +91,16 @@ pub const BpeTokenizer = struct {
         for (ids) |id| {
             if (id >= self.decoder_map.len) return error.TokenIdOutOfBounds;
             const token = self.decoder_map[id];
-            try decoded.appendSlice(token);
+
+            if (std.mem.startsWith(u8, token, "Ġ")) {
+                try decoded.appendSlice(" ");
+                try decoded.appendSlice(token["Ġ".len..]);
+            } else if (std.mem.startsWith(u8, token, "Ċ")) {
+                try decoded.appendSlice("\n");
+                try decoded.appendSlice(token["Ċ".len..]);
+            } else {
+                try decoded.appendSlice(token);
+            }
         }
 
         return try decoded.toOwnedSlice();
@@ -67,16 +110,20 @@ pub const BpeTokenizer = struct {
         // Initialize token list with individual bytes
         var tokens = try std.ArrayList([]const u8).initCapacity(allocator, input.len);
         defer {
-            for (tokens.items) |t| allocator.free(t);
+            // for (tokens.items) |t| allocator.free(t);
             tokens.deinit();
         }
 
-        for (input) |b| {
-            const slice = try allocator.alloc(u8, 1);
-            errdefer allocator.free(slice);
-            slice[0] = b;
-            try tokens.append(slice);
+        var iter = (try std.unicode.Utf8View.init(input)).iterator();
+        while (iter.nextCodepointSlice()) |cp| {
+            try tokens.append(cp);
         }
+        // for (input) |b| {
+        //     const slice = try allocator.alloc(u8, 1);
+        //     errdefer allocator.free(slice);
+        //     slice[0] = b;
+        //     try tokens.append(slice);
+        // }
 
         // Define merge struct for the priority queue
         const Merge = struct {
@@ -134,8 +181,8 @@ pub const BpeTokenizer = struct {
 
             // Perform the merge
             const merged = try std.mem.concat(allocator, u8, &.{ tokens.items[i], tokens.items[i + 1] });
-            allocator.free(tokens.items[i]);
-            allocator.free(tokens.items[i + 1]);
+            // allocator.free(tokens.items[i]);
+            // allocator.free(tokens.items[i + 1]);
             tokens.items[i] = merged;
             _ = tokens.orderedRemove(i + 1);
 

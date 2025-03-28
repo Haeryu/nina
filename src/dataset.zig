@@ -36,6 +36,10 @@ pub const GPT2Dataset = struct {
             allocator.free(encoded);
         }
 
+        const decoded = try tokenizer.decodeAlloc(allocator, token_ids_list.items);
+        defer allocator.free(decoded);
+        // std.debug.print("{s}\n", .{decoded});
+
         const token_ids = try token_ids_list.toOwnedSlice();
         errdefer allocator.free(token_ids);
         const total_sequences = (token_ids.len + sequence_length - 1) / sequence_length;
@@ -96,6 +100,10 @@ pub const GPT2Dataset = struct {
             context.stream,
         );
 
+        // const input_decoded = try self.tokenizer.decodeAlloc(self.allocator, input_sequence);
+        // defer self.allocator.free(input_decoded);
+        // std.debug.print("[input] - {s}\n", .{input_decoded});
+
         const ignore_index: usize = std.math.maxInt(usize);
         for (0..self.sequence_length) |k| {
             const target_pos = start + k + 1;
@@ -110,5 +118,9 @@ pub const GPT2Dataset = struct {
             i * self.sequence_length,
             context.stream,
         );
+
+        // const target_decoded = try self.tokenizer.decodeAlloc(self.allocator, target_sequence);
+        // defer self.allocator.free(target_decoded);
+        // std.debug.print("[target] - {s}\n", .{target_decoded});
     }
 };

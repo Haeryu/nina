@@ -10,3 +10,4 @@ src/tokenizer/encoder_data.zig
 src/tokenizer/merges_data.zig
 gpt_train.bin
 log.txt
+log
