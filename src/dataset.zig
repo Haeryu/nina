@@ -19,26 +19,25 @@ pub const GPT2Dataset = struct {
         allocator: std.mem.Allocator,
         tokenizer: *const BpeTokenizer,
         sequence_length: usize,
-        file_paths: []const []const u8,
+        token_paths: []const []const u8,
     ) !Self {
         var token_ids_list = std.ArrayList(usize).init(allocator);
         defer token_ids_list.deinit();
 
-        for (file_paths) |path| {
+        for (token_paths) |path| {
             var file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
 
-            const content = try file.readToEndAlloc(allocator, std.math.maxInt(usize));
-            defer allocator.free(content);
+            const reader = file.reader();
 
-            const encoded = try tokenizer.encodeAlloc(allocator, content);
-            try token_ids_list.appendSlice(encoded);
-            allocator.free(encoded);
+            const count = try reader.readInt(usize, .little);
+
+            const ids = try allocator.alloc(usize, count);
+            defer allocator.free(ids);
+
+            try reader.readNoEof(std.mem.sliceAsBytes(ids));
+            try token_ids_list.appendSlice(ids);
         }
-
-        const decoded = try tokenizer.decodeAlloc(allocator, token_ids_list.items);
-        defer allocator.free(decoded);
-        // std.debug.print("{s}\n", .{decoded});
 
         const token_ids = try token_ids_list.toOwnedSlice();
         errdefer allocator.free(token_ids);

@@ -4,10 +4,12 @@ const tomo = @import("tomo");
 const tomorin = @import("tomorin");
 
 pub fn main() !void {
-    var gpa: std.heap.DebugAllocator(.{}) = .init;
-    defer _ = gpa.deinit();
+    // var gpa: std.heap.DebugAllocator(.{}) = .init;
+    // defer _ = gpa.deinit();
 
-    const allocator = gpa.allocator();
+    // TODO: make one big struct to train, chat, save (make dataset, dataloader Save code) -> cache system
+
+    const allocator = std.heap.smp_allocator;
 
     var stream: tomo.stream.Stream = try .create();
     defer stream.destroy();
@@ -25,7 +27,7 @@ pub fn main() !void {
     defer base_chain.destroy();
     context.current_chain = base_chain;
 
-    const T = f32;
+    const T = f32; // TODO -> BF16 support start..
     const max_epochs = 10;
 
     // const block_size = 128;
@@ -34,17 +36,22 @@ pub fn main() !void {
     // const n_embd = 128;
     // const n_head = 4;
 
-    const block_size = 256;
+    const block_size = 128;
     const batch_size = 8;
     const n_layer = 6;
     const n_embd = 256;
     const n_head = 8;
 
     const tokenizer: nina.tokenizer.BpeTokenizer = try .init();
+
+    var timer = try std.time.Timer.start();
     var dataset: nina.dataset.GPT2Dataset = try .init(allocator, &tokenizer, block_size, &.{
-        "./datas/tiny.cleaned.txt",
+        "datas/token_ids.bin",
+        // "datas/corpus.cleaned.txt",
     });
     defer dataset.deinit();
+
+    std.debug.print("dataset loaded({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
 
     var gpt: nina.model.GPT(T, n_layer) = try .init(
         .{
@@ -82,40 +89,48 @@ pub fn main() !void {
     var targets = try base_chain.createVariable(usize, targets_t.move(), "targets");
     defer targets.destroy();
 
-    var temp_chain = try context.createChain();
-    defer temp_chain.destroy();
-    context.current_chain = temp_chain;
+    var iter_chain = try context.createChain();
+    defer iter_chain.destroy();
+    context.current_chain = iter_chain;
 
-    _ = try gpt.forward(indices, targets, temp_chain);
-    temp_chain.clear();
+    _ = try gpt.forward(indices, targets, iter_chain);
+    iter_chain.clear();
     indices.clearGrad();
     targets.clearGrad();
     gpt.clearGrads();
 
-    try gpt.loadBinary(allocator, "gpt_train.bin");
+    timer.reset();
+    try gpt.loadBinary(allocator, "gpt_train_harry.bin");
+    // std.debug.print("binary loaded({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
 
-    var timer = try std.time.Timer.start();
+    try clearLog();
 
+    std.debug.print("start\n", .{});
     for (0..max_epochs) |epoch| {
-        dataloader.reset();
-        var sum_loss: T = 0.0;
-        var sum_acc: T = 0.0;
+        // dataloader.reset();
+        var sum_loss: if (T != tomo.BF16) T else f32 = 0.0;
+        var sum_acc: if (T != tomo.BF16) T else f32 = 0.0;
 
+        std.debug.print("epoch {} start\n", .{epoch});
         while (try dataloader.writeNextBatch(.{ &indices.asUntagged(usize).data, &targets.asUntagged(usize).data })) |i| {
-            try stream.sync();
-            var iter_chain = try context.createChain();
-            defer iter_chain.destroy();
-            context.current_chain = iter_chain;
+            std.debug.print("batch {} start\n", .{i});
+            // try stream.sync();
 
-            timer.reset();
             // Forward pass
+            timer.reset();
+            std.debug.print("forward start\n", .{});
             const logits, const loss = try gpt.forward(indices, targets, iter_chain);
+
+            std.debug.print("forward done({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
 
             indices.clearGrad();
             targets.clearGrad();
             gpt.clearGrads();
 
+            timer.reset();
+            std.debug.print("backward start\n", .{});
             try loss.?.backwardEx(iter_chain);
+            std.debug.print("backward done({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
             try optimizer.update(&gpt.getParams());
 
             var host_loss = try loss.?.asUntagged(T).data.toHost(allocator, &stream);
@@ -141,42 +156,54 @@ pub fn main() !void {
             const acc = try tomorin.util.accuracy(T, logits, targets, 2);
 
             try stream.sync();
-            sum_loss += host_loss.at(&.{ 0, 0 }).*;
-            sum_acc += acc;
+            sum_loss += if (T != tomo.BF16) host_loss.at(&.{ 0, 0 }).* else host_loss.at(&.{ 0, 0 }).toF32();
+            sum_acc += if (T != tomo.BF16) acc else acc.toF32();
 
-            try stream.sync();
+            // try stream.sync();
 
-            const elapsed = timer.lap();
-
-            std.debug.print("({}/{}) epoch {} loss {d} acc {d} elapsed {d}\n", .{
+            std.debug.print("({}/{}) epoch {} loss {d} acc {d}\n", .{
                 i,
                 dataloader.max_iter,
                 epoch + 1,
                 host_loss.at(&.{ 0, 0 }).*,
                 acc,
-                @as(f32, @floatFromInt(elapsed)) / @as(f32, @floatFromInt(std.time.ns_per_s)),
             });
 
             //std.debug.print("base func - {} var - {}\n", .{ base_chain.countFunctions(), base_chain.countVariables() });
             //std.debug.print("iter func - {} var - {}\n", .{ iter_chain.countFunctions(), iter_chain.countVariables() });
-            // temp_chain.clear();
-            // std.debug.print("iter func - {} var - {}\n", .{ iter_chain.countFunctions(), iter_chain.countVariables() });
+            try stream.sync();
+            iter_chain.clear();
+            //  try stream.sync();
+            //std.debug.print("iter func - {} var - {}\n", .{ iter_chain.countFunctions(), iter_chain.countVariables() });
 
-            if (i % 10 == 0) {
-                try gpt.saveBinary(allocator, "gpt_train.bin");
+            if (i % 5 == 0) {
+                try gpt.saveBinary(allocator, "gpt_train_harry.bin");
                 std.debug.print("saved!\n", .{});
             }
 
-            try stream.sync();
+            // try stream.sync();
+            //  std.Thread.sleep(1 * std.time.ns_per_s);
+
+            std.debug.print("\n", .{});
         }
 
-        const len: T = @floatFromInt(dataloader.max_iter);
+        const len: if (T != tomo.BF16) T else f32 = @floatFromInt(dataloader.max_iter);
 
         std.debug.print("epoch {} avg loss {d} acc {d}\n", .{
             epoch + 1,
             sum_loss / len,
             sum_acc / len,
         });
+    }
+}
+
+fn clearLog() !void {
+    var dir = try std.fs.cwd().openDir("log", .{ .iterate = true });
+    defer dir.close();
+
+    var it = dir.iterate();
+    while (try it.next()) |entry| {
+        try dir.deleteFile(entry.name);
     }
 }
 
@@ -265,6 +292,7 @@ fn printBatchDetails(
             \\
             \\[output_tokens]
             \\{any}
+            \\
             \\
         , .{
             batch_index,

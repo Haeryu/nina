@@ -10,7 +10,16 @@ vocab_url = "https://huggingface.co/gpt2/raw/main/vocab.json"
 merges_url = "https://huggingface.co/gpt2/raw/main/merges.txt"
 vocab_file = "datas/vocab.json"
 merges_file = "datas/merges.txt"
-raw_corpus_files = ["datas/corpus.txt", "datas/tiny.txt"]
+raw_corpus_files = [
+    "datas/harry_potter/01 Harry Potter and the Sorcerers Stone.txt", 
+    "datas/harry_potter/02 Harry Potter and the Chamber of Secrets.txt", 
+    "datas/harry_potter/03 Harry Potter and the Prisoner of Azkaban.txt", 
+    "datas/harry_potter/04 Harry Potter and the Goblet of Fire.txt", 
+    "datas/harry_potter/05 Harry Potter and the Order of the Phoenix.txt", 
+    "datas/harry_potter/06 Harry Potter and the Half-Blood Prince.txt", 
+    "datas/harry_potter/07 Harry Potter and the Deathly Hallows.txt",       
+    # "datas/corpus.txt"      
+                    ]
 zig_output_dir = "src/tokenizer"
 model_prefix = "my_bpe"
 
@@ -138,9 +147,27 @@ def export_zig_files(tokenizer):
         f.write('const encoder_data = @import("encoder_data.zig").encoder_data;\n\n')
         f.write('pub const encoder_map = StaticStringMap(usize).initComptime(encoder_data);\n')
 
+def save_tokenized_ids(tokenizer, cleaned_files, output_path="datas/token_ids.bin"):
+    import struct
+
+    all_ids = []
+    for path in cleaned_files:
+        with open(path, "r", encoding="utf-8") as f:
+            text = f.read()
+        ids = tokenizer.encode(text).ids
+        all_ids.extend(ids)
+
+    with open(output_path, "wb") as f:
+        f.write(struct.pack("<Q", len(all_ids)))  # total count (usize)
+        for id in all_ids:
+            f.write(struct.pack("<Q", id))  # each usize token id
+    print(f"✅ Saved {len(all_ids)} token ids to {output_path}")
+
+
 if __name__ == "__main__":
     download_tokenizer_files()
     cleaned_files = clean_and_save_files(raw_corpus_files)
     tokenizer = train_tokenizer(cleaned_files)
     export_zig_files(tokenizer)
+    save_tokenized_ids(tokenizer, cleaned_files)
     # print(tokenizer.token_to_id(' '))

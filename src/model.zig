@@ -1,5 +1,6 @@
 const std = @import("std");
 const tomo = @import("tomo");
+const BF16 = tomo.BF16;
 const tomorin = @import("tomorin");
 const GPUTensor = tomo.tensor.GPUTensor;
 const Linear = tomorin.layer.Linear;
@@ -25,6 +26,8 @@ const LayerNorm = tomorin.layer.LayerNorm;
 const CausalSelfAttention = tomorin.layer.CausalSelfAttention;
 const Embedding = tomorin.layer.Embedding;
 
+const dbg = tomorin.util.debugPrintGpuTensor;
+
 pub fn MLP(comptime T: type) type {
     return struct {
         pub usingnamespace LayerDecorator(Self);
@@ -43,7 +46,7 @@ pub fn MLP(comptime T: type) type {
             n_embd: usize,
             nobias: bool,
             linear_winit: Linear(T).WInit,
-            dropout_ratio: T,
+            dropout_ratio: if (T != BF16) T else f32,
         };
 
         pub fn init(
@@ -104,7 +107,7 @@ pub fn Block(comptime T: type) type {
             n_head: usize,
             block_size: usize,
             nobias: bool,
-            dropout_ratio: T,
+            dropout_ratio: if (T != tomo.BF16) T else f32,
             linear_winit: Linear(T).WInit,
             embedding_winit: Embedding(T).WInit,
         };
@@ -191,7 +194,7 @@ pub fn Transformer(comptime T: type, n_layer: comptime_int) type {
             n_head: usize,
             block_size: usize,
             nobias: bool,
-            dropout_ratio: T,
+            dropout_ratio: if (T != tomo.BF16) T else f32,
             linear_winit: Linear(T).WInit,
             embedding_winit: Embedding(T).WInit,
             vocab_size: usize,
@@ -270,9 +273,11 @@ pub fn Transformer(comptime T: type, n_layer: comptime_int) type {
 
             inline for (0..n_layer) |i| {
                 x = try @field(self.fields, std.fmt.comptimePrint("h{}", .{i})).forward(x, train, chain);
+
                 //  try tomorin.util.debugPrintGpuTensor(T, &x.asUntagged(T).data, x.getContext());
             }
             x = try self.fields.ln_f.forward(x, 1e-5, chain);
+
             return x;
         }
     };
@@ -296,7 +301,7 @@ pub fn GPT(comptime T: type, comptime n_layer: comptime_int) type {
             vocab_size: usize = 50304,
             n_head: usize = 12,
             n_embd: usize = 768,
-            dropout_ratio: T = 0.0,
+            dropout_ratio: if (T != tomo.BF16) T else f32 = 0.0,
             nobias: bool = false,
             linear_winit: Linear(T).WInit = .he_normal,
             embedding_winit: Embedding(T).WInit = .he_normal,
