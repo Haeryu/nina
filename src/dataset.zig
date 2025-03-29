@@ -21,7 +21,7 @@ pub const GPT2Dataset = struct {
         sequence_length: usize,
         token_paths: []const []const u8,
     ) !Self {
-        var token_ids_list = std.ArrayList(usize).init(allocator);
+        var token_ids_list: std.ArrayList(usize) = .init(allocator);
         defer token_ids_list.deinit();
 
         for (token_paths) |path| {

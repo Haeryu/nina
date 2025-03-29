@@ -12,4 +12,4 @@ pub const merge_entries = blk: {
     break :blk entries;
 };
 
-pub const merge_map = std.StaticStringMap(usize).initComptime(merge_entries);
+pub const merge_map: std.StaticStringMap(usize) = .initComptime(merge_entries);

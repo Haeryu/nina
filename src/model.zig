@@ -156,6 +156,7 @@ pub fn Block(comptime T: type) type {
                 train,
                 chain,
             ), chain);
+
             y = try addEx(T, y, try self.fields.mlp.forward(
                 try self.fields.ln_2.forward(
                     y,
@@ -247,6 +248,7 @@ pub fn Transformer(comptime T: type, n_layer: comptime_int) type {
             );
 
             self.fields.drop = .init(config.dropout_ratio);
+
             self.fields.ln_f = .init(context, chain);
             self.context = context;
             self.config = config;
@@ -262,10 +264,14 @@ pub fn Transformer(comptime T: type, n_layer: comptime_int) type {
             errdefer pos_data.deinitAsync(self.context.stream);
             try pos_data.arange(0, 1, self.context.stream);
 
+            // try dbg(BF16, &x.asUntagged(BF16).data, x.getContext());
+            // std.time.sleep(100000);
+
             var pos = try chain.createVariable(usize, pos_data.move(), null);
             pos = try broadcastToEx(usize, pos, &.{ 1, t, self.config.n_embd }, chain);
 
             const tok_emb = try self.fields.wte.forward(indices, chain);
+
             var pos_emb = try self.fields.wpe.forward(pos, chain);
             pos_emb = try broadcastToEx(T, pos_emb, tok_emb.getShape(), chain);
 
@@ -276,6 +282,7 @@ pub fn Transformer(comptime T: type, n_layer: comptime_int) type {
 
                 //  try tomorin.util.debugPrintGpuTensor(T, &x.asUntagged(T).data, x.getContext());
             }
+
             x = try self.fields.ln_f.forward(x, 1e-5, chain);
 
             return x;
