@@ -41,13 +41,13 @@ pub fn main() !void {
     const n_layer = 6;
     const n_embd = 256;
     const n_head = 8;
+    const savefile = "gpt_train_tiny.bin";
 
     const tokenizer: nina.tokenizer.BpeTokenizer = try .init();
 
     var timer = try std.time.Timer.start();
     var dataset: nina.dataset.GPT2Dataset = try .init(allocator, &tokenizer, block_size, &.{
-        "datas/token_ids.bin",
-        // "datas/corpus.cleaned.txt",
+        "datas/bin/token_ids.bin",
     });
     defer dataset.deinit();
 
@@ -100,8 +100,8 @@ pub fn main() !void {
     gpt.clearGrads();
 
     timer.reset();
-    try gpt.loadBinary(allocator, "gpt_train_harry.bin");
-    // std.debug.print("binary loaded({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
+    try gpt.loadBinary(allocator, savefile);
+    std.debug.print("binary loaded({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
 
     try clearLog();
 
@@ -117,20 +117,20 @@ pub fn main() !void {
             // try stream.sync();
 
             // Forward pass
-            timer.reset();
             std.debug.print("forward start\n", .{});
+            timer.reset();
             const logits, const loss = try gpt.forward(indices, targets, iter_chain);
-
             std.debug.print("forward done({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
 
             indices.clearGrad();
             targets.clearGrad();
             gpt.clearGrads();
 
-            timer.reset();
             std.debug.print("backward start\n", .{});
+            timer.reset();
             try loss.?.backwardEx(iter_chain);
             std.debug.print("backward done({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
+
             try optimizer.update(&gpt.getParams());
 
             var host_loss = try loss.?.asUntagged(T).data.toHost(allocator, &stream);
@@ -177,7 +177,7 @@ pub fn main() !void {
             //std.debug.print("iter func - {} var - {}\n", .{ iter_chain.countFunctions(), iter_chain.countVariables() });
 
             if (i % 5 == 0) {
-                try gpt.saveBinary(allocator, "gpt_train_harry.bin");
+                try gpt.saveBinary(allocator, savefile);
                 std.debug.print("saved!\n", .{});
             }
 

@@ -32,16 +32,16 @@ pub const GPT2Dataset = struct {
 
             const count = try reader.readInt(usize, .little);
 
-            const ids = try allocator.alloc(usize, count);
-            defer allocator.free(ids);
+            try token_ids_list.appendNTimes(0, count);
 
-            try reader.readNoEof(std.mem.sliceAsBytes(ids));
-            try token_ids_list.appendSlice(ids);
+            const tok_end = token_ids_list.items.len;
+
+            try reader.readNoEof(std.mem.sliceAsBytes(token_ids_list.items[tok_end - count .. tok_end]));
         }
 
         const token_ids = try token_ids_list.toOwnedSlice();
         errdefer allocator.free(token_ids);
-        const total_sequences = (token_ids.len + sequence_length - 1) / sequence_length;
+        const total_sequences = try std.math.divCeil(usize, token_ids.len, sequence_length);
         const pad_token_id = tokenizer.encoder_map.get("<pad>") orelse return error.PadTokenNotFound;
 
         const input_buffer = try allocator.alloc(usize, sequence_length);

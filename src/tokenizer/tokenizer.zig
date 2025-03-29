@@ -111,143 +111,33 @@ pub const BpeTokenizer = struct {
         return try decoded.toOwnedSlice();
     }
 
-    // pub fn applyBpeAlloc(self: *const BpeTokenizer, allocator: std.mem.Allocator, input: []const u8) ![][]const u8 {
-    //     // Initialize token list with individual bytes
-    //     var tokens = try std.ArrayList([]const u8).initCapacity(allocator, input.len);
-    //     defer {
-    //         // for (tokens.items) |t| allocator.free(t);
-    //         tokens.deinit();
-    //     }
-
-    //     var iter = (try std.unicode.Utf8View.init(input)).iterator();
-    //     while (iter.nextCodepointSlice()) |cp| {
-    //         try tokens.append(cp);
-    //     }
-    //     // for (input) |b| {
-    //     //     const slice = try allocator.alloc(u8, 1);
-    //     //     errdefer allocator.free(slice);
-    //     //     slice[0] = b;
-    //     //     try tokens.append(slice);
-    //     // }
-
-    //     // Define merge struct for the priority queue
-    //     const Merge = struct {
-    //         rank: usize,
-    //         index: usize,
-    //     };
-
-    //     // Define heap context for min-heap behavior
-    //     const HeapContext = struct {
-    //         pub fn lessThan(_: void, a: Merge, b: Merge) std.math.Order {
-    //             return std.math.order(a.rank, b.rank);
-    //         }
-    //     };
-
-    //     // Initialize min-heap for merges
-    //     var heap = std.PriorityQueue(Merge, void, HeapContext.lessThan).init(allocator, {});
-    //     defer heap.deinit();
-
-    //     // Reusable buffer for building pair strings
-    //     var buffer = std.ArrayList(u8).init(allocator);
-    //     defer buffer.deinit();
-
-    //     // Populate heap with initial adjacent pairs
-    //     var it = std.mem.window([]const u8, tokens.items, 2, 1);
-    //     var idx: usize = 0;
-    //     while (it.next()) |pair| : (idx += 1) {
-    //         if (pair.len != 2) break;
-    //         buffer.clearRetainingCapacity();
-    //         try buffer.appendSlice(pair[0]);
-    //         try buffer.append(' ');
-    //         try buffer.appendSlice(pair[1]);
-    //         if (self.merge_map.get(buffer.items)) |rank| {
-    //             try heap.add(.{ .rank = rank, .index = idx });
-    //         }
-    //     }
-
-    //     // Process merges using the heap
-    //     while (heap.count() > 0) {
-    //         const merge = heap.remove();
-    //         const i = merge.index;
-
-    //         // Skip if index is invalid due to previous merges
-    //         if (i >= tokens.items.len - 1) continue;
-
-    //         // Verify the pair still matches the merge rank
-    //         buffer.clearRetainingCapacity();
-    //         try buffer.appendSlice(tokens.items[i]);
-    //         try buffer.append(' ');
-    //         try buffer.appendSlice(tokens.items[i + 1]);
-    //         if (self.merge_map.get(buffer.items)) |rank| {
-    //             if (rank != merge.rank) continue;
-    //         } else {
-    //             continue;
-    //         }
-
-    //         // Perform the merge
-    //         const merged = try std.mem.concat(allocator, u8, &.{ tokens.items[i], tokens.items[i + 1] });
-    //         // allocator.free(tokens.items[i]);
-    //         // allocator.free(tokens.items[i + 1]);
-    //         tokens.items[i] = merged;
-    //         _ = tokens.orderedRemove(i + 1);
-
-    //         // Add new potential merges to the heap
-    //         if (i > 0) {
-    //             buffer.clearRetainingCapacity();
-    //             try buffer.appendSlice(tokens.items[i - 1]);
-    //             try buffer.append(' ');
-    //             try buffer.appendSlice(tokens.items[i]);
-    //             if (self.merge_map.get(buffer.items)) |rank| {
-    //                 try heap.add(.{ .rank = rank, .index = i - 1 });
-    //             }
-    //         }
-    //         if (i < tokens.items.len - 1) {
-    //             buffer.clearRetainingCapacity();
-    //             try buffer.appendSlice(tokens.items[i]);
-    //             try buffer.append(' ');
-    //             try buffer.appendSlice(tokens.items[i + 1]);
-    //             if (self.merge_map.get(buffer.items)) |rank| {
-    //                 try heap.add(.{ .rank = rank, .index = i });
-    //             }
-    //         }
-    //     }
-
-    //     return try tokens.toOwnedSlice();
-    // }
-
+    // TODO: test
     pub fn applyBpeAlloc(self: *const BpeTokenizer, allocator: std.mem.Allocator, input: []const u8) ![][]const u8 {
-        // Initialize token list with individual bytes
         var tokens = try std.ArrayList([]const u8).initCapacity(allocator, input.len);
-        defer tokens.deinit(); // Deinitialize the list itself
+        defer tokens.deinit();
 
-        // Split input into UTF-8 codepoints and duplicate them for ownership
         var iter = (try std.unicode.Utf8View.init(input)).iterator();
         while (iter.nextCodepointSlice()) |cp| {
-            try tokens.append(try allocator.dupe(u8, cp)); // Duplicate to manage memory
+            try tokens.append(cp);
         }
 
-        // Define merge struct for the priority queue
         const Merge = struct {
             rank: usize,
             index: usize,
         };
 
-        // Define heap context for min-heap behavior (lower rank = higher priority)
         const HeapContext = struct {
             pub fn lessThan(_: void, a: Merge, b: Merge) std.math.Order {
                 return std.math.order(a.rank, b.rank);
             }
         };
 
-        // Initialize min-heap for merges
         var heap = std.PriorityQueue(Merge, void, HeapContext.lessThan).init(allocator, {});
         defer heap.deinit();
 
-        // Reusable buffer for building pair strings
         var buffer = std.ArrayList(u8).init(allocator);
         defer buffer.deinit();
 
-        // Helper function to add potential merges to the heap
         const addMerges = struct {
             fn add(
                 hp: *std.PriorityQueue(Merge, void, HeapContext.lessThan),
@@ -267,20 +157,16 @@ pub const BpeTokenizer = struct {
             }
         }.add;
 
-        // Populate heap with initial adjacent pairs
         try addMerges(&heap, &tokens, self.merge_map, &buffer);
 
-        // Process merges using the heap
         while (heap.count() > 0) {
             const merge = heap.remove();
             const i = merge.index;
 
-            // Skip if index is invalid due to previous merges
             if (i >= tokens.items.len - 1) {
                 continue;
             }
 
-            // Verify the pair still matches the merge rank
             buffer.clearRetainingCapacity();
             try buffer.appendSlice(tokens.items[i]);
             try buffer.append(' ');
@@ -293,23 +179,15 @@ pub const BpeTokenizer = struct {
                 continue;
             }
 
-            // Perform the merge
             const merged = try std.mem.concat(allocator, u8, &.{ tokens.items[i], tokens.items[i + 1] });
-            // Free the old tokens before replacing them
-            allocator.free(tokens.items[i]);
-            allocator.free(tokens.items[i + 1]);
             tokens.items[i] = merged;
             _ = tokens.orderedRemove(i + 1);
 
-            // Repopulate the heap with current potential merges
-            heap = std.PriorityQueue(Merge, void, HeapContext.lessThan).init(allocator, {}); // Reset heap
+            heap.clearRetainingCapacity();
             try addMerges(&heap, &tokens, self.merge_map, &buffer);
         }
 
-        // Transfer ownership of tokens to the caller
-        const result = try tokens.toOwnedSlice();
-        tokens = std.ArrayList([]const u8).init(allocator); // Reset to avoid double-free
-        return result;
+        return try tokens.toOwnedSlice();
     }
 };
 
