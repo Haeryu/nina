@@ -95,6 +95,7 @@ pub fn main() !void {
     defer iter_chain.destroy();
     context.current_chain = iter_chain;
 
+    // model dynamically allocates weight so you must do dummy forward sorry
     _ = try gpt.forward(indices, targets, iter_chain);
     iter_chain.clear();
     indices.clearGrad();

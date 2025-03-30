@@ -28,7 +28,8 @@ pub const GPT2Dataset = struct {
             var file = try std.fs.cwd().openFile(path, .{});
             defer file.close();
 
-            const reader = file.reader();
+            var bufreader = std.io.bufferedReader(file.reader());
+            var reader = bufreader.reader();
 
             const count = try reader.readInt(usize, .little);
 

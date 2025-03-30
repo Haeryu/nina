@@ -7,8 +7,8 @@ pub const BpeTokenizer = struct {
     unk_token_id: usize,
 
     fn preprocess(allocator: std.mem.Allocator, input: []const u8) ![]u8 {
-        var result = std.ArrayList(u8).init(allocator);
-        defer result.deinit(); // Free on error or if toOwnedSlice fails
+        var result: std.ArrayList(u8) = .init(allocator);
+        defer result.deinit();
 
         var iter = (try std.unicode.Utf8View.init(input)).iterator();
         while (iter.nextCodepointSlice()) |cp| {
@@ -25,14 +25,6 @@ pub const BpeTokenizer = struct {
             }
         }
 
-        // for (input) |c| {
-        //     if (c == ' ') {
-        //         try result.append(0xC4); // First byte of Ġ
-        //         try result.append(0xA0); // Second byte of Ġ
-        //     } else {
-        //         try result.append(c);
-        //     }
-        // }
         return result.toOwnedSlice();
     }
 
@@ -69,11 +61,13 @@ pub const BpeTokenizer = struct {
         // const tokens = try self.applyBpeAlloc(allocator, input);
         const tokens = try self.applyBpeAlloc(allocator, preprocessed);
         defer {
-            // for (tokens) |t| allocator.free(t);
+            for (tokens) |t| {
+                allocator.free(t);
+            }
             allocator.free(tokens);
         }
 
-        var token_ids = try std.ArrayList(usize).initCapacity(allocator, tokens.len);
+        var token_ids: std.ArrayList(usize) = try .initCapacity(allocator, tokens.len);
         defer token_ids.deinit();
 
         for (tokens) |token| {
@@ -85,7 +79,7 @@ pub const BpeTokenizer = struct {
     }
 
     pub fn decodeAlloc(self: *const BpeTokenizer, allocator: std.mem.Allocator, ids: []const usize) ![]u8 {
-        var decoded = std.ArrayList(u8).init(allocator);
+        var decoded: std.ArrayList(u8) = .init(allocator);
         defer decoded.deinit();
 
         for (ids) |id| {
@@ -118,7 +112,8 @@ pub const BpeTokenizer = struct {
 
         var iter = (try std.unicode.Utf8View.init(input)).iterator();
         while (iter.nextCodepointSlice()) |cp| {
-            try tokens.append(cp);
+            const owned_cp = try allocator.dupe(u8, cp);
+            try tokens.append(owned_cp);
         }
 
         const Merge = struct {
@@ -132,7 +127,7 @@ pub const BpeTokenizer = struct {
             }
         };
 
-        var heap = std.PriorityQueue(Merge, void, HeapContext.lessThan).init(allocator, {});
+        var heap: std.PriorityQueue(Merge, void, HeapContext.lessThan) = .init(allocator, {});
         defer heap.deinit();
 
         var buffer = std.ArrayList(u8).init(allocator);
@@ -145,11 +140,15 @@ pub const BpeTokenizer = struct {
                 merge_map: *const std.StaticStringMap(usize),
                 buf: *std.ArrayList(u8),
             ) !void {
-                for (0..ts.items.len - 1) |i| {
+                var it = std.mem.window([]const u8, ts.items, 2, 1);
+                var i: usize = 0;
+                while (it.next()) |pair| : (i += 1) {
+                    if (pair.len < 2) break;
+
                     buf.clearRetainingCapacity();
-                    try buf.appendSlice(ts.items[i]);
+                    try buf.appendSlice(pair[0]);
                     try buf.append(' ');
-                    try buf.appendSlice(ts.items[i + 1]);
+                    try buf.appendSlice(pair[1]);
                     if (merge_map.get(buf.items)) |rank| {
                         try hp.add(.{ .rank = rank, .index = i });
                     }
@@ -179,7 +178,11 @@ pub const BpeTokenizer = struct {
                 continue;
             }
 
-            const merged = try std.mem.concat(allocator, u8, &.{ tokens.items[i], tokens.items[i + 1] });
+            const old_i = tokens.items[i];
+            const old_i_plus_1 = tokens.items[i + 1];
+            const merged = try std.mem.concat(allocator, u8, &.{ old_i, old_i_plus_1 });
+            allocator.free(old_i);
+            allocator.free(old_i_plus_1);
             tokens.items[i] = merged;
             _ = tokens.orderedRemove(i + 1);
 
@@ -191,166 +194,252 @@ pub const BpeTokenizer = struct {
     }
 };
 
-// test "applyBpeAlloc merges tokens correctly" {
-//     const allocator = std.testing.allocator;
+// Test 1: Initialization with Custom Maps
+test "Initialization with custom maps" {
 
-//     // Initialize merge_map
-//     var merge_map = std.StaticStringMap(usize).initComptime(.{
-//         .{ "a b", 0 },
-//         .{ "b c", 1 },
-//     });
+    // Mock maps
+    const merge_map = std.StaticStringMap(usize).initComptime(&.{
+        .{ "a b", 1 },
+        .{ "b c", 2 },
+    });
 
-//     var encoder_map = std.StaticStringMap(usize).initComptime(&[_]struct { []const u8, usize }{
-//         .{ "<unk>", 0 },
-//     });
+    const encoder_map = std.StaticStringMap(usize).initComptime(&.{
+        .{ "a", 0 },
+        .{ "b", 1 },
+        .{ "c", 2 },
+        .{ "<unk>", 3 },
+    });
 
-//     var tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, &.{});
+    const decoder_map = &[_][]const u8{ "a", "b", "c", "<unk>" };
 
-//     const input = "abcd"; // Bytes: [97, 98, 99, 100]
-//     const tokens = try tokenizer.applyBpeAlloc(allocator, input);
-//     defer {
-//         for (tokens) |t| allocator.free(t);
-//         allocator.free(tokens);
-//     }
+    const tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
+    try std.testing.expectEqual(3, tokenizer.unk_token_id); // Verify unk_token_id is set correctly
+}
 
-//     try std.testing.expectEqual(@as(usize, 3), tokens.len);
-//     try std.testing.expectEqualSlices(u8, "ab", tokens[0]);
-//     try std.testing.expectEqualSlices(u8, "c", tokens[1]);
-//     try std.testing.expectEqualSlices(u8, "d", tokens[2]);
-// }
+// Test 2: Preprocessing
+test "Preprocessing" {
+    const allocator = std.testing.allocator;
+    const input = "Hello world\nThis is a test";
+    const expected = "HelloĠworldĊThisĠisĠaĠtest";
 
-// test "encodeAlloc works correctly with known tokens" {
-//     const allocator = std.testing.allocator;
+    const preprocessed = try BpeTokenizer.preprocess(allocator, input);
+    defer allocator.free(preprocessed);
 
-//     // Define merge_map to merge "a b" and "b c"
-//     var merge_map = std.StaticStringMap(usize).initComptime(.{
-//         .{ "a b", 0 },
-//         .{ "b c", 1 },
-//     });
+    try std.testing.expectEqualStrings(expected, preprocessed); // Check space and newline replacements
+}
 
-//     // Define encoder_map with "<unk>" and token mappings
-//     var encoder_map = std.StaticStringMap(usize).initComptime(.{
-//         .{ "<unk>", 0 }, // Required for initCustom
-//         .{ "ab", 1 },
-//         .{ "c", 2 },
-//         .{ "d", 3 },
-//     });
+// Test 3: Encoding
+test "Encoding" {
+    const allocator = std.testing.allocator;
 
-//     // Define decoder_map
-//     const decoder_map = &[_][]const u8{ "<unk>", "ab", "c", "d" };
+    // Mock maps
+    const merge_map = std.StaticStringMap(usize).initComptime(&.{
+        .{ "H e", 1 },
+        .{ "l l", 2 },
+    });
 
-//     // Initialize tokenizer
-//     var tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
+    const encoder_map = std.StaticStringMap(usize).initComptime(&.{
+        .{ "H", 0 },   .{ "e", 1 }, .{ "l", 2 }, .{ "o", 3 },     .{ "Ġ", 4 },
+        .{ "w", 5 },   .{ "r", 6 }, .{ "d", 7 }, .{ "<unk>", 8 }, .{ "He", 9 },
+        .{ "ll", 10 },
+    });
 
-//     // Input to encode
-//     const input = "abcd";
-//     const token_ids = try tokenizer.encodeAlloc(allocator, input);
-//     defer allocator.free(token_ids);
+    const decoder_map = &[_][]const u8{ "H", "e", "l", "o", "Ġ", "w", "r", "d", "<unk>" };
 
-//     // Expected IDs: "ab" (1), "c" (2), "d" (3)
-//     const expected_ids = [_]usize{ 1, 2, 3 };
-//     try std.testing.expectEqualSlices(usize, &expected_ids, token_ids);
-// }
+    const tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
 
-// test "encodeAlloc handles unknown tokens with unk_token_id" {
-//     const allocator = std.testing.allocator;
+    const input = "Hello world";
+    const expected_ids = &[_]usize{ 9, 10, 3, 4, 5, 3, 6, 2, 7 }; // "He ll o Ġ w o r l d"
 
-//     // Define merge_map
-//     var merge_map = std.StaticStringMap(usize).initComptime(.{
-//         .{ "a b", 0 },
-//     });
+    const ids = try tokenizer.encodeAlloc(allocator, input);
+    defer allocator.free(ids);
 
-//     // Define encoder_map with "<unk>" but missing "c" and "d"
-//     var encoder_map = std.StaticStringMap(usize).initComptime(.{
-//         .{ "<unk>", 0 }, // unk_token_id will be 0
-//         .{ "ab", 1 },
-//     });
+    try std.testing.expectEqualSlices(usize, expected_ids, ids);
+}
 
-//     // Define decoder_map
-//     const decoder_map = &[_][]const u8{ "<unk>", "ab" };
+test "Encoding2" {
+    const allocator = std.testing.allocator;
 
-//     // Initialize tokenizer
-//     var tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
+    // Expanded merge map with additional rules
+    const merge_map = std.StaticStringMap(usize).initComptime(&.{
+        .{ "H e", 1 }, // Merge "H e" into "He"
+        .{ "l l", 2 }, // Merge "l l" into "ll"
+        .{ "h e", 3 }, // Merge "h e" into "he"
+        .{ "o r", 4 }, // Merge "o r" into "or"
+    });
 
-//     // Input to encode: "abcd" -> "ab", "c", "d" but "c" and "d" are unknown
-//     const input = "abcd";
-//     const token_ids = try tokenizer.encodeAlloc(allocator, input);
-//     defer allocator.free(token_ids);
+    // Expanded encoder map with new tokens and special characters
+    const encoder_map = std.StaticStringMap(usize).initComptime(&.{
+        .{ "H", 0 }, .{ "e", 1 }, .{ "l", 2 }, .{ "o", 3 }, .{ "Ġ", 4 }, // Basic tokens and space marker
+        .{ "w", 5 }, .{ "r", 6 }, .{ "d", 7 }, .{ "<unk>", 8 }, .{ "He", 9 }, // Original merges and unknown token
+        .{ "ll", 10 }, .{ "h", 11 }, .{ "he", 12 }, .{ "or", 13 }, .{ "C", 14 }, // New merges and additional tokens
+        .{ "a", 15 },  .{ "f", 16 }, .{ ",", 17 },  .{ "!", 18 },
+    });
 
-//     // Expected: "ab" (1), "<unk>" (0), "<unk>" (0)
-//     const expected_ids = [_]usize{ 1, 0, 0 };
-//     try std.testing.expectEqualSlices(usize, &expected_ids, token_ids);
-// }
+    // Decoder map updated for consistency (not used in encoding but included for completeness)
+    const decoder_map = &[_][]const u8{
+        "H",  "e", "l",  "o",  "Ġ", "w", "r", "d", "<unk>", "He",
+        "ll", "h", "he", "or", "C",  "a", "f", ",", "!",
+    };
 
-// test "decodeAlloc works correctly" {
-//     const allocator = std.testing.allocator;
+    // Initialize the tokenizer with custom maps
+    const tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
 
-//     var merge_map = std.StaticStringMap(usize).initComptime(.{
-//         .{ "a b", 0 },
-//         .{ "b c", 1 },
-//     });
+    // Test Case 1: Multiple merges with repeated patterns
+    {
+        const input = "Hello hello";
+        // Preprocessed: "HelloĠhello"
+        // Initial tokens: ["H", "e", "l", "l", "o", "Ġ", "h", "e", "l", "l", "o"]
+        // Merges: "H e" -> "He", "l l" -> "ll", "h e" -> "he", "l l" -> "ll"
+        // Final tokens: ["He", "ll", "o", "Ġ", "he", "ll", "o"]
+        const expected_ids = &[_]usize{ 9, 10, 3, 4, 12, 10, 3 };
+        const ids = try tokenizer.encodeAlloc(allocator, input);
+        defer allocator.free(ids);
+        try std.testing.expectEqualSlices(usize, expected_ids, ids);
+    }
 
-//     var encoder_map = std.StaticStringMap(usize).initComptime(.{
-//         .{ "<unk>", 0 },
-//         .{ "ab", 1 },
-//         .{ "c", 2 },
-//         .{ "d", 3 },
-//     });
+    // Test Case 2: Original input with additional merge opportunity
+    {
+        const input = "Hello world";
+        // Preprocessed: "HelloĠworld"
+        // Initial tokens: ["H", "e", "l", "l", "o", "Ġ", "w", "o", "r", "l", "d"]
+        // Merges: "H e" -> "He", "l l" -> "ll", "o r" -> "or"
+        // Final tokens: ["He", "ll", "o", "Ġ", "w", "or", "l", "d"]
+        const expected_ids = &[_]usize{ 9, 10, 3, 4, 5, 13, 2, 7 };
+        const ids = try tokenizer.encodeAlloc(allocator, input);
+        defer allocator.free(ids);
+        try std.testing.expectEqualSlices(usize, expected_ids, ids);
+    }
 
-//     const decoder_map = &[_][]const u8{ "<unk>", "ab", "c", "d" };
+    // Test Case 3: Special characters and unknown tokens
+    {
+        const input = "Hello, Caché!";
+        // Preprocessed: "Hello,ĠCaché!"
+        // Initial tokens: ["H", "e", "l", "l", "o", ",", "Ġ", "C", "a", "c", "h", "é", "!"]
+        // Merges: "H e" -> "He", "l l" -> "ll"
+        // Final tokens: ["He", "ll", "o", ",", "Ġ", "C", "a", "c", "h", "é", "!"]
+        // Note: "c" and "é" are not in encoder_map, so map to "<unk>"
+        const expected_ids = &[_]usize{ 9, 10, 3, 17, 4, 14, 15, 8, 11, 8, 18 };
+        const ids = try tokenizer.encodeAlloc(allocator, input);
+        defer allocator.free(ids);
+        try std.testing.expectEqualSlices(usize, expected_ids, ids);
+    }
 
-//     var tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
+    // Test Case 4: Empty string
+    {
+        const input = "";
+        // No tokens after preprocessing
+        const expected_ids = &[_]usize{};
+        const ids = try tokenizer.encodeAlloc(allocator, input);
+        defer allocator.free(ids);
+        try std.testing.expectEqualSlices(usize, expected_ids, ids);
+    }
 
-//     // Input IDs to decode
-//     const ids = [_]usize{ 1, 2, 3, 0 }; // "ab", "c", "d", "<unk>"
-//     const decoded = try tokenizer.decodeAlloc(allocator, &ids);
-//     defer allocator.free(decoded);
+    // Test Case 5: String with only spaces
+    {
+        const input = "  ";
+        // Preprocessed: "ĠĠ"
+        // Final tokens: ["Ġ", "Ġ"] (no merges apply)
+        const expected_ids = &[_]usize{ 4, 4 };
+        const ids = try tokenizer.encodeAlloc(allocator, input);
+        defer allocator.free(ids);
+        try std.testing.expectEqualSlices(usize, expected_ids, ids);
+    }
+}
 
-//     // Expect "abcd<unk>" from concatenating "ab", "c", "d", "<unk>"
-//     try std.testing.expectEqualSlices(u8, "abcd<unk>", decoded);
-// }
+// Test 4: Decoding
+test "Decoding" {
+    const allocator = std.testing.allocator;
 
-// test "encodeAlloc and decodeAlloc round-trip with unknown tokens" {
-//     const allocator = std.testing.allocator;
+    // Mock maps
+    const merge_map = std.StaticStringMap(usize).initComptime(&.{});
 
-//     var merge_map = std.StaticStringMap(usize).initComptime(.{
-//         .{ "a b", 0 },
-//     });
+    const encoder_map = std.StaticStringMap(usize).initComptime(&.{
+        .{ "H", 0 },
+        .{ "e", 1 },
+        .{ "l", 2 },
+        .{ "o", 3 },
+        .{ "Ġ", 4 },
+        .{ "w", 5 },
+        .{ "r", 6 },
+        .{ "d", 7 },
+        .{ "<unk>", 8 },
+    });
 
-//     var encoder_map = std.StaticStringMap(usize).initComptime(.{
-//         .{ "<unk>", 0 }, // unk_token_id will be 0
-//         .{ "ab", 1 },
-//     });
+    const decoder_map = &[_][]const u8{ "H", "e", "l", "o", "Ġ", "w", "r", "d", "<unk>" };
 
-//     const decoder_map = &[_][]const u8{ "<unk>", "ab" };
+    const tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
 
-//     var tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
+    const ids = &[_]usize{ 0, 1, 2, 2, 3, 4, 5, 3, 6, 2, 7 }; // "H e l l o Ġ w o r l d"
+    const expected_text = "Hello world";
 
-//     const input = "abcd"; // "ab" is known, "c" and "d" are unknown
-//     const token_ids = try tokenizer.encodeAlloc(allocator, input);
-//     defer allocator.free(token_ids);
+    const text = try tokenizer.decodeAlloc(allocator, ids);
+    defer allocator.free(text);
 
-//     const decoded = try tokenizer.decodeAlloc(allocator, token_ids);
-//     defer allocator.free(decoded);
+    try std.testing.expectEqualStrings(expected_text, text); // Verify decoded text matches expected
+}
 
-//     // Expected tokens: "ab" (1), "<unk>" (0), "<unk>" (0) -> "ab<unk><unk>"
-//     try std.testing.expectEqualSlices(u8, "ab<unk><unk>", decoded);
-// }
+// Test 5: BPE Application with Merges
+test "BPE Application with Merges" {
+    const allocator = std.testing.allocator;
 
-// test "decodeAlloc handles ID out of bounds" {
-//     const allocator = std.testing.allocator;
+    // Define a merge_map with sequential merges
+    const merge_map = std.StaticStringMap(usize).initComptime(&.{
+        .{ "a b", 1 }, // Merge "a" and "b" first
+        .{ "ab c", 2 }, // Then merge "ab" and "c"
+    });
 
-//     var merge_map = std.StaticStringMap(usize).initComptime(.{});
+    // Dummy maps (not used by applyBpeAlloc directly)
+    const encoder_map = std.StaticStringMap(usize).initComptime(&.{
+        .{ "<unk>", 0 },
+    });
 
-//     var encoder_map = std.StaticStringMap(usize).initComptime(.{
-//         .{ "<unk>", 0 },
-//     });
+    const decoder_map = &[_][]const u8{};
 
-//     const decoder_map = &[_][]const u8{ "<unk>", "ab", "c", "d" }; // Length 4, indices 0-3 valid
+    const tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
 
-//     var tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
+    const input = "abc"; // Split into ["a", "b", "c"]
+    const expected_tokens = &[_][]const u8{"abc"}; // After "a b" -> "ab", then "ab c" -> "abc"
 
-//     const ids = [_]usize{ 0, 1, 4 }; // 4 is out of bounds
-//     const result = tokenizer.decodeAlloc(allocator, &ids);
-//     //  try std.testing.expectError(error.TokenIdOutOfBounds, result);
-// }
+    const tokens = try tokenizer.applyBpeAlloc(allocator, input);
+    defer {
+        for (tokens) |token| allocator.free(token);
+        allocator.free(tokens);
+    }
+
+    try std.testing.expectEqual(expected_tokens.len, tokens.len);
+    for (expected_tokens, 0..) |expected, i| {
+        try std.testing.expectEqualStrings(expected, tokens[i]);
+    }
+}
+
+// Test 6: BPE Application with No Merges
+test "BPE Application with No Merges" {
+    const allocator = std.testing.allocator;
+
+    // Empty merge_map
+    const merge_map = std.StaticStringMap(usize).initComptime(&.{});
+
+    // Dummy maps
+    const encoder_map = std.StaticStringMap(usize).initComptime(&.{
+        .{ "<unk>", 0 },
+    });
+
+    const decoder_map = &[_][]const u8{};
+
+    const tokenizer = try BpeTokenizer.initCustom(&merge_map, &encoder_map, decoder_map);
+
+    const input = "abc";
+    const expected_tokens = &[_][]const u8{ "a", "b", "c" };
+
+    const tokens = try tokenizer.applyBpeAlloc(allocator, input);
+    defer {
+        for (tokens) |token| allocator.free(token);
+        allocator.free(tokens);
+    }
+
+    try std.testing.expectEqual(expected_tokens.len, tokens.len);
+    for (expected_tokens, 0..) |expected, i| {
+        try std.testing.expectEqualStrings(expected, tokens[i]);
+    }
+}
