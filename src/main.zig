@@ -27,7 +27,7 @@ pub fn main() !void {
     defer base_chain.destroy();
     context.current_chain = base_chain;
 
-    const T = tomo.BF16; // TODO -> BF16 support start..
+    const T = tomo.BF16; // TODO -> BF16 support start -> err when load data?
     const max_epochs = 100;
 
     // const block_size = 128;
@@ -42,6 +42,7 @@ pub fn main() !void {
     const n_layer = 6;
     const n_embd = 256;
     const n_head = 8;
+
     const savefile = "gpt_train_tiny16.bin";
 
     const tokenizer: nina.tokenizer.BpeTokenizer = try .init();
@@ -94,15 +95,14 @@ pub fn main() !void {
     defer iter_chain.destroy();
     context.current_chain = iter_chain;
 
-    // _ = try gpt.forward(indices, targets, iter_chain);
-    // iter_chain.clear();
-    // indices.clearGrad();
-    // targets.clearGrad();
-    // gpt.clearGrads();
-
-    // timer.reset();
-    // try gpt.loadBinary(allocator, savefile);
-    // std.debug.print("binary loaded({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
+    _ = try gpt.forward(indices, targets, iter_chain);
+    iter_chain.clear();
+    indices.clearGrad();
+    targets.clearGrad();
+    gpt.clearGrads();
+    timer.reset();
+    try gpt.loadBinary(allocator, savefile);
+    std.debug.print("binary loaded({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
 
     try clearLog();
 
@@ -176,6 +176,10 @@ pub fn main() !void {
             iter_chain.clear();
             //  try stream.sync();
             //std.debug.print("iter func - {} var - {}\n", .{ iter_chain.countFunctions(), iter_chain.countVariables() });
+
+            if (std.math.isNan(host_loss.at(&.{ 0, 0 }))) {
+                @panic("nan detected");
+            }
 
             if (i % 5 == 0) {
                 try gpt.saveBinary(allocator, savefile);

@@ -19,10 +19,12 @@ const softmaxEx = tomorin.function.softmaxEx;
 const broadcastToEx = tomorin.function.broadcastToEx;
 const softmaxCrossEntropyEx = tomorin.function.softmaxCrossEntropyEx;
 const getItemEx = tomorin.function.getItemEx;
+const castEx = tomorin.function.castEx;
 const LayerDecorator = tomorin.layer.LayerDecorator;
 const LayerFieldsFactory = tomorin.layer.LayerFieldsFactory;
 const Gelu = tomorin.layer.Gelu;
 const LayerNorm = tomorin.layer.LayerNorm;
+const LayerNormMixed = tomorin.layer.LayerNormMixed;
 const CausalSelfAttention = tomorin.layer.CausalSelfAttention;
 const Embedding = tomorin.layer.Embedding;
 
@@ -94,9 +96,9 @@ pub fn Block(comptime T: type) type {
         fields: LayerFieldsFactory(
             &.{},
             &.{
-                .{ "ln_1", LayerNorm(T) },
+                .{ "ln_1", if (T == BF16 or T == f16) LayerNormMixed(T, f32) else LayerNorm(T) },
                 .{ "attn", CausalSelfAttention(T) },
-                .{ "ln_2", LayerNorm(T) },
+                .{ "ln_2", if (T == BF16 or T == f16) LayerNormMixed(T, f32) else LayerNorm(T) },
                 .{ "mlp", MLP(T) },
             },
         ),
@@ -183,7 +185,7 @@ pub fn Transformer(comptime T: type, n_layer: comptime_int) type {
                 .{ "drop", Dropout(T) },
             } ++ makeBlock() ++
                 .{
-                    .{ "ln_f", LayerNorm(T) },
+                    .{ "ln_f", if (T == BF16 or T == f16) LayerNormMixed(T, f32) else LayerNorm(T) },
                 }),
         ),
         config: Config,
@@ -357,16 +359,26 @@ pub fn GPT(comptime T: type, comptime n_layer: comptime_int) type {
                 const batch = logits.getShape()[0];
                 const seq_len = logits.getShape()[1];
                 const vocab_size = logits.getShape()[2];
-                const logits_reshaped = try reshapeEx(T, logits, &.{ batch * seq_len, vocab_size }, chain);
+                var logits_reshaped = try reshapeEx(T, logits, &.{ batch * seq_len, vocab_size }, chain);
                 const target_batch = targ.getShape()[0];
                 const target_seq_len = targ.getShape()[1];
                 const target = try reshapeEx(usize, targ, &.{target_batch * target_seq_len}, chain);
-                const loss = try softmaxCrossEntropyEx(T, logits_reshaped, .{
-                    .t = target,
-                    .ignore_index = std.math.maxInt(usize),
-                }, chain);
 
-                return .{ logits, loss };
+                if (T == BF16 or T == f16) {
+                    logits_reshaped = try castEx(T, f32, logits_reshaped, chain);
+                    var loss = try softmaxCrossEntropyEx(f32, logits_reshaped, .{
+                        .t = target,
+                        .ignore_index = std.math.maxInt(usize),
+                    }, chain);
+                    loss = try castEx(f32, T, loss, chain);
+                    return .{ logits, loss };
+                } else {
+                    const loss = try softmaxCrossEntropyEx(T, logits_reshaped, .{
+                        .t = target,
+                        .ignore_index = std.math.maxInt(usize),
+                    }, chain);
+                    return .{ logits, loss };
+                }
             } else {
                 const x_last = try getItemEx(T, 3, x, .{ .all, .{
                     .start = @intCast(x.getShape()[1] - 1),

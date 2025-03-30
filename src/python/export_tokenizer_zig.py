@@ -6,7 +6,6 @@ import unicodedata
 import re
 import struct
 
-# === 설정 ===
 vocab_url = "https://huggingface.co/gpt2/raw/main/vocab.json"
 merges_url = "https://huggingface.co/gpt2/raw/main/merges.txt"
 vocab_file = "datas/vocab.json"
