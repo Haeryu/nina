@@ -11,6 +11,7 @@ Reference
 I made it to study structure of Deep Learning frameworks.
 
 log example
+
 <batch 0>
 [input]
  this mixture do not work at all?
