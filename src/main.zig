@@ -95,7 +95,7 @@ pub fn main() !void {
     defer iter_chain.destroy();
     context.current_chain = iter_chain;
 
-    // model dynamically allocates weight so you must do dummy forward sorry
+    // model dynamically allocates weight so you must do dummy forward
     _ = try gpt.forward(indices, targets, iter_chain);
     iter_chain.clear();
     indices.clearGrad();
@@ -154,7 +154,10 @@ pub fn main() !void {
                 epoch,
                 i,
                 block_size,
-                "rise my child",
+                \\WARWICK:
+                \\In Warwickshire I have true-hearted friends,
+                \\
+            ,
                 &context,
             );
 
@@ -245,6 +248,37 @@ fn printBatchDetails(
 
     var writer = log.writer();
 
+    _ = gpt;
+    _ = block_size;
+    _ = prompt;
+
+    // var timer = try std.time.Timer.start();
+    // const out = try generatePromptAlloc(
+    //     T,
+    //     allocator,
+    //     gpt,
+    //     tokenizer,
+    //     prompt,
+    //     block_size,
+    //     context,
+    // );
+    // defer allocator.free(out);
+    // const end = timer.lap();
+
+    // try writer.print(
+    //     \\[prompt]
+    //     \\{s}
+    //     \\
+    //     \\[generated] (elapsed: {d})
+    //     \\{s}
+    //     \\
+    //     \\
+    // , .{
+    //     prompt,
+    //     @as(f32, @floatFromInt(end)) / @as(f32, @floatFromInt(std.time.ns_per_s)),
+    //     out,
+    // });
+
     for (0..batch_size) |batch_index| {
         var host_indices = try indices.toHost(allocator, context.stream);
         defer host_indices.deinit(allocator);
@@ -298,6 +332,7 @@ fn printBatchDetails(
             \\[output_tokens]
             \\{any}
             \\
+            \\
         , .{
             batch_index,
             input_decoded,
@@ -306,32 +341,10 @@ fn printBatchDetails(
             output_ids,
         });
 
-        _ = gpt;
-        _ = block_size;
-        _ = prompt;
-        // const out = try generatePromptAlloc(
-        //     T,
-        //     allocator,
-        //     gpt,
-        //     tokenizer,
-        //     prompt,
-        //     block_size,
-        //     context,
-        // );
-        // defer allocator.free(out);
+        // _ = gpt;
+        // _ = block_size;
+        // _ = prompt;
 
-        // try writer.print(
-        //     \\[prompt]
-        //     \\{s}
-        //     \\
-        //     \\[generated]
-        //     \\{s}
-        //     \\
-        //     \\
-        // , .{
-        //     prompt,
-        //     out,
-        // });
     }
 
     // var host_logits = try logits.toHost(allocator, stream);
@@ -364,14 +377,18 @@ fn generatePromptAlloc(
 
     var input_tensor = try tomo.tensor.GPUTensor(usize).initAsync(&.{ 1, block_size }, context.stream);
     defer input_tensor.deinitAsync(context.stream);
+    try input_tensor.fill(std.math.maxInt(usize), context.stream);
 
     const var_input = try prompt_base_chain.createVariable(usize, input_tensor.move(), null);
     defer var_input.destroy();
 
+    var xoshiro = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
+    const random = xoshiro.random();
+
     const max_tokens = 32;
     while (generated_tokens.items.len < max_tokens) {
         // defer context.stream.sync() catch unreachable;
-        //  try input_tensor.fill(std.math.maxInt(usize), context.stream);
+        // try input_tensor.fill(std.math.maxInt(usize), context.stream);
 
         const input_len = @min(generated_tokens.items.len, block_size);
         const input_slice = generated_tokens.items[generated_tokens.items.len - input_len ..];
@@ -381,25 +398,98 @@ fn generatePromptAlloc(
         const logits, _ = try gpt.forward(var_input, null, prompt_iter_chain);
         defer logits.destroy();
 
-        var pred = try logits.asUntagged(T).data.argmax(context.allocator, &.{2}, true, context.stream);
-        defer pred.deinitAsync(context.stream);
-
         try context.stream.sync();
-        var host_pred = try pred.toHost(allocator, context.stream);
-        defer host_pred.deinit(allocator);
-
+        var logits_f32 = try logits.asUntagged(T).data.toHost(allocator, context.stream);
+        defer logits_f32.deinit(allocator);
         try context.stream.sync();
 
-        const new_token = host_pred.data[0];
+        const vocab_size = logits.getShape()[2];
+        const logits_slice = logits_f32.data[0..vocab_size];
+
+        const new_token = try sampleTopKTopPTemperature(allocator, random, logits_slice, 14, 0.9, 1.0);
 
         try generated_tokens.append(new_token);
 
-        if (new_token == tokenizer.encoder_map.get("<|endoftext|>").?) break;
-
         prompt_iter_chain.clear();
+
+        if (new_token == tokenizer.encoder_map.get("<|endoftext|>").?) break;
     }
 
     const result = try tokenizer.decodeAlloc(allocator, generated_tokens.items);
 
     return result;
+}
+
+fn sampleTopKTopPTemperature(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    logits: []const f32,
+    top_k: usize,
+    top_p: f32,
+    temperature: f32,
+) !usize {
+    const Id = struct {
+        id: usize,
+        logit: f32,
+        prob: f32,
+    };
+    var items = try allocator.alloc(Id, logits.len);
+    defer allocator.free(items);
+
+    var max_logit: f32 = -std.math.floatMax(f32);
+    for (logits) |value| {
+        if (value > max_logit) {
+            max_logit = value;
+        }
+    }
+
+    for (logits, 0..) |value, i| {
+        items[i].id = i;
+        const shifted = (value - max_logit) / temperature;
+        items[i].logit = shifted;
+    }
+
+    for (items) |*it| {
+        it.prob = @exp(it.logit);
+    }
+
+    std.sort.heap(Id, items, {}, struct {
+        fn cmp(_: void, a: Id, b: Id) bool {
+            return a.prob > b.prob;
+        }
+    }.cmp);
+
+    const k = if (top_k < items.len) top_k else items.len;
+    var cutoff_len = k;
+
+    var cumulative: f32 = 0.0;
+    var i: usize = 0;
+    while (i < cutoff_len) : (i += 1) {
+        cumulative += items[i].prob;
+        if (cumulative >= top_p) {
+            cutoff_len = i + 1;
+            break;
+        }
+    }
+
+    var sum_probs: f32 = 0.0;
+    for (items[0..cutoff_len]) |it| {
+        sum_probs += it.prob;
+    }
+    if (sum_probs == 0.0) {
+        return items[0].id;
+    }
+    for (items[0..cutoff_len]) |*it| {
+        it.prob = it.prob / sum_probs;
+    }
+
+    const r = random.float(f32);
+    var cdf: f32 = 0.0;
+    for (items[0..cutoff_len]) |it| {
+        cdf += it.prob;
+        if (r <= cdf) {
+            return it.id;
+        }
+    }
+    return items[cutoff_len - 1].id;
 }
