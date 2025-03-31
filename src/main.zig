@@ -27,7 +27,7 @@ pub fn main() !void {
     defer base_chain.destroy();
     context.current_chain = base_chain;
 
-    const T = tomo.BF16; // TODO -> BF16 support start -> err when load data?
+    const T = f32;
     const max_epochs = 100;
 
     // const block_size = 128;
@@ -37,13 +37,13 @@ pub fn main() !void {
     // const n_head = 4;
 
     const block_size = 128;
-    const batch_size = 32;
+    const batch_size = 16;
     // const batch_size = 1;
     const n_layer = 6;
     const n_embd = 256;
     const n_head = 8;
 
-    const savefile = "gpt_train_tiny16.bin";
+    const savefile = "gpt_train_tiny.bin";
 
     const tokenizer: nina.tokenizer.BpeTokenizer = try .init();
 
