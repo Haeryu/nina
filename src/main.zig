@@ -146,13 +146,16 @@ pub fn main() !void {
             try printBatchDetails(
                 T,
                 allocator,
+                &gpt,
                 &tokenizer,
                 &indices.asUntagged(usize).data,
                 &targets.asUntagged(usize).data,
                 &logits.asUntagged(T).data,
                 epoch,
                 i,
-                &stream,
+                block_size,
+                "rise my child",
+                &context,
             );
 
             const acc = try tomorin.util.accuracy(T, logits, targets, 2);
@@ -216,13 +219,16 @@ fn clearLog() !void {
 fn printBatchDetails(
     comptime T: type,
     allocator: std.mem.Allocator,
+    gpt: anytype,
     tokenizer: *const nina.tokenizer.BpeTokenizer,
     indices: *tomo.tensor.GPUTensor(usize),
     targets: *tomo.tensor.GPUTensor(usize),
     logits: *tomo.tensor.GPUTensor(T),
     epoch: usize,
     i: usize,
-    stream: *tomo.stream.Stream,
+    block_size: usize,
+    prompt: []const u8,
+    context: *tomorin.context.Context,
 ) !void {
     // Check if batch_index is valid
     const batch_size = indices.base.getShapeConst()[0];
@@ -240,35 +246,30 @@ fn printBatchDetails(
     var writer = log.writer();
 
     for (0..batch_size) |batch_index| {
-        var host_indices = try indices.toHost(allocator, stream);
+        var host_indices = try indices.toHost(allocator, context.stream);
         defer host_indices.deinit(allocator);
 
-        var host_targets = try targets.toHost(allocator, stream);
+        var host_targets = try targets.toHost(allocator, context.stream);
         defer host_targets.deinit(allocator);
 
-        // Get sequence length
         const seq_len = indices.base.getShapeConst()[1];
 
-        // Extract input sequence for the specified batch
         const input_ids = host_indices.data[batch_index * seq_len .. (batch_index + 1) * seq_len];
 
-        // Extract target sequence for the specified batch
         const target_ids = host_targets.data[batch_index * seq_len .. (batch_index + 1) * seq_len];
 
-        // Compute predicted output IDs from logits using argmax
-        var pred = try logits.argmax(allocator, &.{2}, true, stream);
-        defer pred.deinitAsync(stream);
-        try stream.sync();
+        var pred = try logits.argmax(allocator, &.{2}, true, context.stream);
+        defer pred.deinitAsync(context.stream);
+        try context.stream.sync();
 
-        var host_pred = try pred.toHost(allocator, stream);
+        var host_pred = try pred.toHost(allocator, context.stream);
         defer host_pred.deinit(allocator);
 
-        const vocab_size = tokenizer.decoder_map.len; // Get the tokenizer's vocabulary size
+        const vocab_size = tokenizer.decoder_map.len;
         for (host_pred.data) |*id| {
             if (id.* >= vocab_size) {
-                // Replace invalid token IDs with the <unk> token ID
                 try writer.print("Warning: Clamping invalid token ID {d} to <unk> ({d})\n", .{ id.*, tokenizer.unk_token_id });
-                id.* = tokenizer.unk_token_id; // Ensure this is a valid ID (e.g., 0 or a specific <unk> ID)
+                id.* = tokenizer.unk_token_id;
             }
         }
 
@@ -283,9 +284,7 @@ fn printBatchDetails(
         const output_decoded = try tokenizer.decodeAlloc(allocator, output_ids);
         defer allocator.free(output_decoded);
 
-        // Print in the requested format
         try writer.print(
-            // "<batch {d}>\n[input]\n{s}\n[target]\n{s}\n[output]\n{s}\n[output_tokens]\n{any}\n\n"
             \\<batch {d}>
             \\[input]
             \\{s}
@@ -299,7 +298,6 @@ fn printBatchDetails(
             \\[output_tokens]
             \\{any}
             \\
-            \\
         , .{
             batch_index,
             input_decoded,
@@ -307,9 +305,101 @@ fn printBatchDetails(
             output_decoded,
             output_ids,
         });
+
+        _ = gpt;
+        _ = block_size;
+        _ = prompt;
+        // const out = try generatePromptAlloc(
+        //     T,
+        //     allocator,
+        //     gpt,
+        //     tokenizer,
+        //     prompt,
+        //     block_size,
+        //     context,
+        // );
+        // defer allocator.free(out);
+
+        // try writer.print(
+        //     \\[prompt]
+        //     \\{s}
+        //     \\
+        //     \\[generated]
+        //     \\{s}
+        //     \\
+        //     \\
+        // , .{
+        //     prompt,
+        //     out,
+        // });
     }
 
     // var host_logits = try logits.toHost(allocator, stream);
     // defer host_logits.deinit(allocator);
     // std.debug.print("[output_raw]\n{d}\n\n", .{host_logits});
+}
+
+fn generatePromptAlloc(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    gpt: anytype,
+    tokenizer: *const nina.tokenizer.BpeTokenizer,
+    prompt: []const u8,
+    block_size: usize,
+    context: *tomorin.context.Context,
+) ![]u8 {
+    const tokens = try tokenizer.encodeAlloc(allocator, prompt);
+    defer allocator.free(tokens);
+
+    var generated_tokens = std.ArrayList(usize).init(allocator);
+    defer generated_tokens.deinit();
+
+    try generated_tokens.appendSlice(tokens);
+
+    var prompt_base_chain = try context.createChain();
+    defer prompt_base_chain.destroy();
+
+    var prompt_iter_chain = try context.createChain();
+    defer prompt_iter_chain.destroy();
+
+    var input_tensor = try tomo.tensor.GPUTensor(usize).initAsync(&.{ 1, block_size }, context.stream);
+    defer input_tensor.deinitAsync(context.stream);
+
+    const var_input = try prompt_base_chain.createVariable(usize, input_tensor.move(), null);
+    defer var_input.destroy();
+
+    const max_tokens = 32;
+    while (generated_tokens.items.len < max_tokens) {
+        // defer context.stream.sync() catch unreachable;
+        //  try input_tensor.fill(std.math.maxInt(usize), context.stream);
+
+        const input_len = @min(generated_tokens.items.len, block_size);
+        const input_slice = generated_tokens.items[generated_tokens.items.len - input_len ..];
+
+        try var_input.writeFromHost(usize, input_slice, 0);
+
+        const logits, _ = try gpt.forward(var_input, null, prompt_iter_chain);
+        defer logits.destroy();
+
+        var pred = try logits.asUntagged(T).data.argmax(context.allocator, &.{2}, true, context.stream);
+        defer pred.deinitAsync(context.stream);
+
+        try context.stream.sync();
+        var host_pred = try pred.toHost(allocator, context.stream);
+        defer host_pred.deinit(allocator);
+
+        try context.stream.sync();
+
+        const new_token = host_pred.data[0];
+
+        try generated_tokens.append(new_token);
+
+        if (new_token == tokenizer.encoder_map.get("<|endoftext|>").?) break;
+
+        prompt_iter_chain.clear();
+    }
+
+    const result = try tokenizer.decodeAlloc(allocator, generated_tokens.items);
+
+    return result;
 }
