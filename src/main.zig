@@ -47,7 +47,7 @@ pub fn main() !void {
 
     const prompts = [_][]const u8{
         \\Overmind:
-        \\Awaken my child, and embrace the glory that is your birthright. 
+        \\Awaken my child, and embrace the glory that is your birthright.
         \\Know that I am the Overmind -- the eternal will of the Swarm -- and that you have been created to serve me.
         \\
         \\You:
@@ -99,7 +99,7 @@ pub fn main() !void {
         \\
         ,
         \\Darth Vader:
-        \\Join me, and I will complete your training. 
+        \\Join me, and I will complete your training.
         \\With our combined strength, we can end this destructive conflict and bring order to the galaxy.
         \\
         \\Luke:

@@ -22,7 +22,7 @@ You:
 
 [generated] (elapsed: 65.70935)
 Overmind:
-Awaken my child, and embrace the glory that is your birthright. 훹Know that I am the Overmind -- the eternal will of the Swarm -- and that you have been created to serve me.
+Awaken my child, and embrace the glory that is your birthright. Know that I am the Overmind -- the eternal will of the Swarm -- and that you have been created to serve me.
 
 You:
 , thrusted, complain before,,im thrust by up d thrust souls, thrust before, purePray up, d thrust d, souls, thrust almostst spirit thrust thrust soulsim,, of pure thrust almost souls sorrowfl, upim of,, before souls into I such souls spirit in up before sudden thrust suddenim thyself beforest, most, thrust sudden:
@@ -206,7 +206,7 @@ No. I, am your father.
 
 [generated] (elapsed: 37.42916)
 Darth Vader:
-Join me, and I will complete your training. 훹With our combined strength, we can end this destructive conflict and bring order to the galaxy.
+Join me, and I will complete your training. With our combined strength, we can end this destructive conflict and bring order to the galaxy.
 
 Luke:
 I'LL NEVER JOIN YOU!!
