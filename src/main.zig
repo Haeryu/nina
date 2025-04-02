@@ -154,8 +154,7 @@ pub fn main() !void {
                 epoch,
                 i,
                 block_size,
-                \\WARWICK:
-                \\In Warwickshire I have true-hearted friends,
+                \\Rise, my child.
                 \\
             ,
                 &context,
@@ -248,36 +247,36 @@ fn printBatchDetails(
 
     var writer = log.writer();
 
-    _ = gpt;
-    _ = block_size;
-    _ = prompt;
+    // _ = gpt;
+    // _ = block_size;
+    // _ = prompt;
 
-    // var timer = try std.time.Timer.start();
-    // const out = try generatePromptAlloc(
-    //     T,
-    //     allocator,
-    //     gpt,
-    //     tokenizer,
-    //     prompt,
-    //     block_size,
-    //     context,
-    // );
-    // defer allocator.free(out);
-    // const end = timer.lap();
+    var timer = try std.time.Timer.start();
+    const out = try generatePromptAlloc(
+        T,
+        allocator,
+        gpt,
+        tokenizer,
+        prompt,
+        block_size,
+        context,
+    );
+    defer allocator.free(out);
+    const end = timer.lap();
 
-    // try writer.print(
-    //     \\[prompt]
-    //     \\{s}
-    //     \\
-    //     \\[generated] (elapsed: {d})
-    //     \\{s}
-    //     \\
-    //     \\
-    // , .{
-    //     prompt,
-    //     @as(f32, @floatFromInt(end)) / @as(f32, @floatFromInt(std.time.ns_per_s)),
-    //     out,
-    // });
+    try writer.print(
+        \\[prompt]
+        \\{s}
+        \\
+        \\[generated] (elapsed: {d})
+        \\{s}
+        \\
+        \\
+    , .{
+        prompt,
+        @as(f32, @floatFromInt(end)) / @as(f32, @floatFromInt(std.time.ns_per_s)),
+        out,
+    });
 
     for (0..batch_size) |batch_index| {
         var host_indices = try indices.toHost(allocator, context.stream);
@@ -405,8 +404,10 @@ fn generatePromptAlloc(
 
         const vocab_size = logits.getShape()[2];
         const logits_slice = logits_f32.data[0..vocab_size];
+        // std.debug.print("{any}", .{logits_slice});
 
-        const new_token = try sampleTopKTopPTemperature(allocator, random, logits_slice, 14, 0.9, 1.0);
+        //const new_token = try sampleTopKTopPTemperature(allocator, random, logits_slice, 40, 0.9, 1.5);
+        const new_token = try sampleTopKTemperature(allocator, random, logits_slice, 40, 1.5);
 
         try generated_tokens.append(new_token);
 
@@ -492,4 +493,68 @@ fn sampleTopKTopPTemperature(
         }
     }
     return items[cutoff_len - 1].id;
+}
+
+fn sampleTopKTemperature(
+    allocator: std.mem.Allocator,
+    random: std.Random,
+    logits: []const f32,
+    top_k: usize,
+    temperature: f32,
+) !usize {
+    const Id = struct {
+        id: usize,
+        logit: f32,
+        prob: f32,
+    };
+    var items = try allocator.alloc(Id, logits.len);
+    defer allocator.free(items);
+
+    var max_logit: f32 = -std.math.floatMax(f32);
+    for (logits) |value| {
+        if (value > max_logit) {
+            max_logit = value;
+        }
+    }
+
+    for (logits, 0..) |value, i| {
+        items[i].id = i;
+        const shifted = (value - max_logit) / temperature;
+        items[i].logit = shifted;
+    }
+
+    for (items) |*it| {
+        it.prob = @exp(it.logit);
+    }
+
+    std.sort.heap(Id, items, {}, struct {
+        fn cmp(_: void, a: Id, b: Id) bool {
+            return a.prob > b.prob;
+        }
+    }.cmp);
+
+    const k = if (top_k < items.len) top_k else items.len;
+
+    var sum_probs: f32 = 0.0;
+    for (items[0..k]) |it| {
+        sum_probs += it.prob;
+    }
+
+    if (sum_probs == 0.0) {
+        return items[0].id;
+    }
+
+    for (items[0..k]) |*it| {
+        it.prob = it.prob / sum_probs;
+    }
+
+    const r = random.float(f32);
+    var cdf: f32 = 0.0;
+    for (items[0..k]) |it| {
+        cdf += it.prob;
+        if (r <= cdf) {
+            return it.id;
+        }
+    }
+    return items[k - 1].id;
 }

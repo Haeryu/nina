@@ -105,7 +105,7 @@ def train_tokenizer(corpus_files):
         add_prefix_space=False
     )
 
-def export_zig_files(tokenizer):
+def export_zig_files():
     os.makedirs(zig_output_dir, exist_ok=True)
     with open(f"datas/{model_prefix}-vocab.json", "r", encoding="utf-8") as vf:
         vocab = json.load(vf)
@@ -167,6 +167,6 @@ if __name__ == "__main__":
     download_tokenizer_files()
     cleaned_files = clean_and_save_files(raw_corpus_files)
     tokenizer = train_tokenizer(cleaned_files)
-    export_zig_files(tokenizer)
+    export_zig_files()
     save_tokenized_ids(tokenizer, cleaned_files)
     # print(tokenizer.token_to_id(' '))
