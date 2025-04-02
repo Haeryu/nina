@@ -8,7 +8,7 @@ datas
 src/tokenizer/decoder_map.zig
 src/tokenizer/encoder_data.zig
 src/tokenizer/merges_data.zig
-gpt_train_tiny.bin
+# gpt_train_tiny.bin
 gpt_train_harry.bin
 log.txt
 log

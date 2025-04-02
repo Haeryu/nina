@@ -44,6 +44,15 @@ pub fn main() !void {
     const n_head = 8;
 
     const savefile = "gpt_train_tiny.bin";
+    const prompt =
+        \\HAERYU:
+        \\Rise, my child!
+        \\
+        \\YOU:
+        \\
+    ;
+    const train = false;
+    const n_run = 10;
 
     const tokenizer: nina.tokenizer.BpeTokenizer = try .init();
 
@@ -107,7 +116,82 @@ pub fn main() !void {
 
     try clearLog();
 
+    if (train) {
+        try trainGPT(
+            T,
+            allocator,
+            max_epochs,
+            &gpt,
+            &tokenizer,
+            &dataloader,
+            indices,
+            targets,
+            &optimizer,
+            block_size,
+            savefile,
+            \\HAERYU:
+            \\Rise, my child!
+            \\
+            \\YOU:
+            \\
+        ,
+            &context,
+            iter_chain,
+        );
+    } else {
+        const writer = std.io.getStdOut().writer();
+
+        for (0..n_run) |_| {
+            timer.reset();
+            const out = try generatePromptAlloc(
+                T,
+                allocator,
+                &gpt,
+                &tokenizer,
+                prompt,
+                block_size,
+                128,
+                &context,
+            );
+            defer allocator.free(out);
+            const end = timer.lap();
+
+            try writer.print(
+                \\[prompt]
+                \\{s}
+                \\
+                \\[generated] (elapsed: {d})
+                \\{s}
+                \\
+                \\
+                \\
+            , .{
+                prompt,
+                @as(f32, @floatFromInt(end)) / @as(f32, @floatFromInt(std.time.ns_per_s)),
+                out,
+            });
+        }
+    }
+}
+
+fn trainGPT(
+    comptime T: type,
+    allocator: std.mem.Allocator,
+    max_epochs: usize,
+    gpt: anytype,
+    tokenizer: *const nina.tokenizer.BpeTokenizer,
+    dataloader: *tomorin.dataloader.DataLoader(nina.dataset.GPT2Dataset),
+    indices: *tomorin.variable.TaggedVar,
+    targets: *tomorin.variable.TaggedVar,
+    optimizer: anytype,
+    block_size: usize,
+    savefile: []const u8,
+    prompt: []const u8,
+    context: *tomorin.context.Context,
+    chain: *tomorin.chain.Chain,
+) !void {
     std.debug.print("start\n", .{});
+    var timer = try std.time.Timer.start();
     for (0..max_epochs) |epoch| {
         // dataloader.reset();
         var sum_loss: if (T != tomo.BF16) T else f32 = 0.0;
@@ -121,7 +205,7 @@ pub fn main() !void {
             // Forward pass
             std.debug.print("forward start\n", .{});
             timer.reset();
-            const logits, const loss = try gpt.forward(indices, targets, iter_chain);
+            const logits, const loss = try gpt.forward(indices, targets, chain);
             std.debug.print("forward done({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
 
             indices.clearGrad();
@@ -130,39 +214,37 @@ pub fn main() !void {
 
             std.debug.print("backward start\n", .{});
             timer.reset();
-            try loss.?.backwardEx(iter_chain);
+            try loss.?.backwardEx(chain);
             std.debug.print("backward done({d})\n", .{@as(f32, @floatFromInt(timer.lap())) / @as(f32, @floatFromInt(std.time.ns_per_s))});
 
             try optimizer.update(&gpt.getParams());
 
-            var host_loss = try loss.?.asUntagged(T).data.toHost(allocator, &stream);
+            var host_loss = try loss.?.asUntagged(T).data.toHost(allocator, context.stream);
             defer host_loss.deinit(allocator);
 
             var pred = try logits.asUntagged(T).data.argmax(context.allocator, &.{2}, true, context.stream);
             defer pred.deinitAsync(context.stream);
 
-            try stream.sync();
+            try context.stream.sync();
 
             try printBatchDetails(
                 T,
                 allocator,
                 &gpt,
-                &tokenizer,
+                tokenizer,
                 &indices.asUntagged(usize).data,
                 &targets.asUntagged(usize).data,
                 &logits.asUntagged(T).data,
                 epoch,
                 i,
                 block_size,
-                \\Rise, my child.
-                \\
-            ,
-                &context,
+                prompt,
+                context,
             );
 
             const acc = try tomorin.util.accuracy(T, logits, targets, 2);
 
-            try stream.sync();
+            try context.stream.sync();
             sum_loss += if (T != tomo.BF16) host_loss.at(&.{ 0, 0 }).* else host_loss.at(&.{ 0, 0 }).toF32();
             sum_acc += if (T != tomo.BF16) acc else acc.toF32();
 
@@ -178,8 +260,8 @@ pub fn main() !void {
 
             //std.debug.print("base func - {} var - {}\n", .{ base_chain.countFunctions(), base_chain.countVariables() });
             //std.debug.print("iter func - {} var - {}\n", .{ iter_chain.countFunctions(), iter_chain.countVariables() });
-            try stream.sync();
-            iter_chain.clear();
+            try context.stream.sync();
+            chain.clear();
             //  try stream.sync();
             //std.debug.print("iter func - {} var - {}\n", .{ iter_chain.countFunctions(), iter_chain.countVariables() });
 
@@ -259,6 +341,7 @@ fn printBatchDetails(
         tokenizer,
         prompt,
         block_size,
+        32,
         context,
     );
     defer allocator.free(out);
@@ -358,6 +441,7 @@ fn generatePromptAlloc(
     tokenizer: *const nina.tokenizer.BpeTokenizer,
     prompt: []const u8,
     block_size: usize,
+    max_tokens: usize,
     context: *tomorin.context.Context,
 ) ![]u8 {
     const tokens = try tokenizer.encodeAlloc(allocator, prompt);
@@ -384,7 +468,6 @@ fn generatePromptAlloc(
     var xoshiro = std.Random.DefaultPrng.init(@intCast(std.time.microTimestamp()));
     const random = xoshiro.random();
 
-    const max_tokens = 32;
     while (generated_tokens.items.len < max_tokens) {
         // defer context.stream.sync() catch unreachable;
         // try input_tensor.fill(std.math.maxInt(usize), context.stream);
@@ -394,7 +477,7 @@ fn generatePromptAlloc(
 
         try var_input.writeFromHost(usize, input_slice, 0);
 
-        const logits, _ = try gpt.forward(var_input, null, prompt_iter_chain);
+        const logits, _ = try gpt.*.forward(var_input, null, prompt_iter_chain);
         defer logits.destroy();
 
         try context.stream.sync();
