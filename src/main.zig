@@ -44,15 +44,95 @@ pub fn main() !void {
     const n_head = 8;
 
     const savefile = "gpt_train_tiny.bin";
-    const prompt =
-        \\HAERYU:
-        \\Rise, my child!
+
+    const prompts = [_][]const u8{
+        \\Overmind:
+        \\Awaken my child, and embrace the glory that is your birthright. 
+        \\Know that I am the Overmind -- the eternal will of the Swarm -- and that you have been created to serve me.
         \\
-        \\YOU:
+        \\You:
         \\
-    ;
+        ,
+        \\Alice:
+        \\Would you tell me, please, which way I ought to go from here?
+        \\
+        \\The Cheshire Cat:
+        \\That depends a good deal on where you want to get to.
+        \\
+        \\Alice:
+        \\I don't much care where.
+        \\
+        \\The Cheshire Cat:
+        \\Then it doesn't much matter which way you go.
+        \\
+        ,
+        \\Edgar Dijkstra:
+        \\Go To Statement Considered Harmful.
+        \\The computer was born to solve problems that did not exist before.
+        \\Software is like entropy: It is difficult to grasp, weighs nothing, and obeys the Second Law of Thermodynamics.
+        \\
+        \\COMPUTER:
+        \\
+        ,
+        \\I know you are all fighting because you are scared and confused.
+        \\I'm confused too. All day, I don't know what the heck is going on. But somehow, this feels like it's all my fault.
+        \\
+        \\When I choose to see the good side of things, I'm not being naive.
+        \\It is strategic and necessary.
+        \\It's how I've learned to survive through everything.
+        \\
+        \\I don't know.
+        \\The only thing I do know... is that we have to be kind.
+        \\Please, be kind - especially when we don't know what's going on.
+        \\
+        ,
+        \\Peter Brand: 
+        \\The Visalia Oaks and our 240 lb catcher Jeremy Brown, who as you know, scared to run to second base.
+        \\This was in a game six weeks ago.
+        \\This guy is going to start him off with a fastball.
+        \\Jeremy's going to take him to deep center. Here's what's really interesting, because Jeremy's gonna do what he never does.
+        \\He's gonna go for it. He's gonna around first and he's gonna go for it. Okay?
+        \\
+        \\Peter Brand:
+        \\This is all Jeremy's nightmares coming to life.
+        \\
+        \\Billy Beane:
+        \\Awwww, they're laughing at him.
+        \\
+        \\Peter Brand:
+        \\And Jeremy's about to find out why.
+        \\Jeremy's about to realize that the ball went 60 feet over the fence.
+        \\He hit a home run and didn't even realize it.
+        \\
+        ,
+        \\Darth Vader:
+        \\You are beaten. It is useless to resist. Don't let yourself be destroyed as Obi-Wan did.
+        \\
+        \\Darth Vader:
+        \\There is no escape. Don't make me destroy you.
+        \\
+        \\Darth Vader:
+        \\Luke, you do not yet realize your importance. 
+        \\You have only begun to discover your power. 
+        \\Join me, and I will complete your training. 
+        \\With our combined strength, we can end this destructive conflict and bring order to the galaxy.
+        \\
+        \\Luke:
+        \\I'LL NEVER JOIN YOU!!
+        \\
+        \\Darth Vader:
+        \\If you only knew the power of the Dark Side. Obi-Wan never told you what happened to your father.
+        \\
+        \\Luke:
+        \\He told me enough! He told me you killed him!
+        \\
+        \\Darth Vader:
+        \\No. I, am your father.
+        \\
+        ,
+    };
+
     const train = false;
-    const n_run = 10;
 
     const tokenizer: nina.tokenizer.BpeTokenizer = try .init();
 
@@ -129,19 +209,14 @@ pub fn main() !void {
             &optimizer,
             block_size,
             savefile,
-            \\HAERYU:
-            \\Rise, my child!
-            \\
-            \\YOU:
-            \\
-        ,
+            prompts[0],
             &context,
             iter_chain,
         );
     } else {
         const writer = std.io.getStdOut().writer();
 
-        for (0..n_run) |_| {
+        for (prompts) |prompt| {
             timer.reset();
             const out = try generatePromptAlloc(
                 T,
@@ -150,7 +225,7 @@ pub fn main() !void {
                 &tokenizer,
                 prompt,
                 block_size,
-                128,
+                256,
                 &context,
             );
             defer allocator.free(out);
@@ -446,6 +521,10 @@ fn generatePromptAlloc(
 ) ![]u8 {
     const tokens = try tokenizer.encodeAlloc(allocator, prompt);
     defer allocator.free(tokens);
+
+    // for (tokens) |token| {
+    //     std.debug.print("{s}\n", .{tokenizer.decoder_map[token]});
+    // }
 
     var generated_tokens = std.ArrayList(usize).init(allocator);
     defer generated_tokens.deinit();
