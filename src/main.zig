@@ -86,13 +86,6 @@ pub fn main() !void {
         \\Please, be kind - especially when we don't know what's going on.
         \\
         ,
-        \\Peter Brand: 
-        \\The Visalia Oaks and our 240 lb catcher Jeremy Brown, who as you know, scared to run to second base.
-        \\This was in a game six weeks ago.
-        \\This guy is going to start him off with a fastball.
-        \\Jeremy's going to take him to deep center. Here's what's really interesting, because Jeremy's gonna do what he never does.
-        \\He's gonna go for it. He's gonna around first and he's gonna go for it. Okay?
-        \\
         \\Peter Brand:
         \\This is all Jeremy's nightmares coming to life.
         \\
@@ -106,14 +99,6 @@ pub fn main() !void {
         \\
         ,
         \\Darth Vader:
-        \\You are beaten. It is useless to resist. Don't let yourself be destroyed as Obi-Wan did.
-        \\
-        \\Darth Vader:
-        \\There is no escape. Don't make me destroy you.
-        \\
-        \\Darth Vader:
-        \\Luke, you do not yet realize your importance. 
-        \\You have only begun to discover your power. 
         \\Join me, and I will complete your training. 
         \\With our combined strength, we can end this destructive conflict and bring order to the galaxy.
         \\
